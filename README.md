@@ -1,26 +1,21 @@
 # Logic Pro MCP Server for Claude, Cursor, and AI Agents
 
-[![MCP Toplist](https://mcptoplist.com/badge/io.github.MongLong0214%2Flogic-pro-mcp.svg)](https://mcptoplist.com/server/io.github.MongLong0214%2Flogic-pro-mcp)
-
 A local Model Context Protocol (MCP) server that lets Claude Code, Claude Desktop, Cursor, Codex, VS Code, and other MCP clients control Logic Pro for AI music production: create tracks, write MIDI, operate transport and mixer state, inspect live project data, and verify results.
 
-[Install](#1-install) · [Watch demo](docs/media/logic-pro-mcp-demo.mp4) · [What it controls](#what-it-controls)
+This is [jordy33](https://github.com/jordy33)'s fork of [MongLong0214/logic-pro-mcp](https://github.com/MongLong0214/logic-pro-mcp), carrying Creator Studio (`com.apple.mobilelogic`) focus-handling fixes not yet upstream (see [CHANGELOG.md](CHANGELOG.md) for the full history this fork inherited, and this fork's own commits for what changed since).
 
-> ### 🏆 Selected for Anthropic's [Claude for Open Source](https://claude.com/contact-sales/claude-for-oss) program
-> Logic Pro MCP has been **officially selected for Anthropic's Claude for Open Source program** — recognition from the makers of Claude that this project is open-source work worth supporting. This server is built with Claude, for Claude-powered agents — and is now officially supported by the program.
+[Install](#1-install) · [Watch demo](docs/media/logic-pro-mcp-demo.mp4) · [What it controls](#what-it-controls)
 
 <p align="center">
   <img src="https://img.shields.io/badge/Logic_Pro-MCP_Server-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Logic Pro MCP Server" />
 </p>
 
 <p align="center">
-  <a href="https://claude.com/contact-sales/claude-for-oss"><img src="https://img.shields.io/badge/Claude_for_Open_Source-Selected-D97757.svg?style=flat-square&logo=anthropic&logoColor=white" alt="Claude for Open Source — Selected" /></a>
   <a href="https://swift.org"><img src="https://img.shields.io/badge/Swift-6.0+-F05138.svg?style=flat-square" /></a>
   <a href="https://developer.apple.com/macos/"><img src="https://img.shields.io/badge/macOS-14+-000000.svg?style=flat-square&logo=apple" /></a>
   <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-0.10-blue.svg?style=flat-square" /></a>
-  <a href="https://github.com/MongLong0214/logic-pro-mcp/actions/workflows/ci.yml"><img src="https://github.com/MongLong0214/logic-pro-mcp/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/jordy33/mcp_logic/actions/workflows/ci.yml"><img src="https://github.com/jordy33/mcp_logic/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" /></a>
-  <img src="https://img.shields.io/badge/stable-v3.18.0-blue.svg?style=flat-square" />
 </p>
 
 <p align="center">
@@ -66,11 +61,11 @@ Counts below are read from the current source tree with the command shown; re-ru
 | Control channels | **7** — CoreMIDI, Accessibility, CGEvent, AppleScript, MCU, MIDIKeyCommands, Scripter | `grep -n 'case .* = "' Sources/LogicProMCP/Channels/Channel.swift` |
 | Locales Logic ships | **10** — de-DE en-US es-ES fr-FR it-IT ja-JP ko-KR pt-BR zh-CN zh-TW | `python3 -c "import json; print(json.load(open('docs/locale/ui-labels.json'))['supported_locales'])"` |
 | Supported Logic Pro | **Latest Logic Pro first** — desktop **Logic Pro** (`com.apple.logic10`, `/Applications/Logic Pro.app`). Apple Creator Studio **Logic Pro Creator Studio** (`com.apple.mobilelogic`, `/Applications/Logic Pro Creator Studio.app`) is recognised, not supported. Desktop **Logic Pro** is the only variant the release qualification matrix covers (`shipVariants = [.desktop]`), and the only one this release supports. Without `LOGIC_PRO_BUNDLE_ID` the server can still select Creator Studio: it targets the frontmost Logic; failing that a running one, then an installed one, desktop first in both. So a Creator Studio that is frontmost, or is the only Logic running, becomes the target, with no qualification evidence behind it. Set `LOGIC_PRO_BUNDLE_ID=com.apple.logic10` to keep the server on desktop Logic Pro. Logic Pro 12.3 is the actively-validated target (macOS 15.6+); older versions down to the 12.0.1 floor are best-effort |
-| Release state | **Current stable**: `v3.18.0` — [v3.18.0](https://github.com/MongLong0214/logic-pro-mcp/releases/tag/v3.18.0) |
+| Release state | **Current stable**: `v3.18.0` (this fork builds from source; no GitHub Release is published here — see [Install](#1-install)) |
 
 If this project helps you make music with Claude, Cursor, Codex, or any MCP client, star the repo. It helps the project reach more Logic Pro users and maintainers.
 
-Want to contribute? Start with the [Contributing Guide](CONTRIBUTING.md) and the [open issues](https://github.com/MongLong0214/logic-pro-mcp/issues?q=is%3Aissue%20is%3Aopen). Many docs, examples, validation tests, and CLI-message improvements do not require Logic Pro.
+Want to contribute? Start with the [Contributing Guide](CONTRIBUTING.md) and the [open issues](https://github.com/jordy33/mcp_logic/issues?q=is%3Aissue%20is%3Aopen). Many docs, examples, validation tests, and CLI-message improvements do not require Logic Pro.
 
 ## Why It Exists
 
@@ -135,7 +130,7 @@ A `derived` label has not been read from a running Logic in that locale; it is A
 
 ## Quick Start
 
-**Prerequisites**: macOS 14+ for the MCP server, Logic Pro (latest release prioritized — currently **12.3**, which Apple lists as requiring macOS 15.6+; older Logic versions down to the 12.0.1 floor are best-effort), and an MCP client that can launch a stdio server. Published GitHub Actions/Homebrew assets are universal (`arm64` + `x86_64`) and do not require Xcode. Bounce/export uses the bundled native CGEvent helper with no third-party click binary.
+**Prerequisites**: macOS 14+ for the MCP server, Logic Pro (latest release prioritized — currently **12.3**, which Apple lists as requiring macOS 15.6+; older Logic versions down to the 12.0.1 floor are best-effort), the Xcode Command Line Tools (for `swift build` — this fork is source-build only, see [Install](#1-install)), and an MCP client that can launch a stdio server, or `python3` for the bundled HTTP/SSE bridge. Bounce/export uses the bundled native CGEvent helper with no third-party click binary.
 
 > **Logic Pro version policy.** Logic Pro MCP tracks the **latest Logic Pro release as its first-class target** and validates against it. When Apple ships a new Logic Pro version, supporting it is the top priority — the Accessibility/UI tree shifts between releases, so the newest version is where fixes land first. Older versions above the 12.0.1 floor remain best-effort and may lose parity as those UI surfaces change.
 
@@ -145,30 +140,24 @@ The current stable line is `v3.18.0` (cut 2026-09-28 UTC). Its per-release detai
 
 ### 1. Install
 
-```bash
-brew tap MongLong0214/logic-pro-mcp https://github.com/MongLong0214/logic-pro-mcp
-brew trust monglong0214/logic-pro-mcp   # Homebrew 6.0+ requires trusting third-party taps
-brew install logic-pro-mcp
-```
-
-The Homebrew formula pins both the release tarball URL and its SHA256; Homebrew itself is a trusted delivery channel with its own signature chain. This is the hardened path for production installs. (On Homebrew older than 6.0 the `brew trust` step does not exist — skip it.)
-
-For source-tree development, build locally:
+This fork is source-build only — no Homebrew tap or GitHub Release is published for it. Build it with the Swift toolchain that ships in Xcode / Xcode Command Line Tools (`xcode-select --install` if `swift build` is not found):
 
 ```bash
-git clone https://github.com/MongLong0214/logic-pro-mcp.git
-cd logic-pro-mcp
+git clone https://github.com/jordy33/mcp_logic.git
+cd mcp_logic
 swift build -c release
 ```
 
-To upgrade an existing install: Homebrew installs use `brew update && brew upgrade logic-pro-mcp`; source builds use `git pull && swift build -c release`; pinned shell-installer installs re-run the installer with the new release's pins (below). Because release binaries are ad-hoc signed (no Apple Developer ID; see [SECURITY.md](SECURITY.md#release-signing)), macOS treats each new build as a different signed identity — **Accessibility and Automation grants do not carry over to a freshly built or reinstalled binary**, and TCC re-approval for the launcher app is expected after every upgrade, not just after long gaps ([docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) covers removing stale TCC entries and re-granting them).
+This produces `.build/release/LogicProMCP`. A clean build of the full package takes a few minutes; expect warnings, not errors, on a successful run.
+
+To upgrade an existing install: `git pull && swift build -c release`. Because each build is ad-hoc signed with no Apple Developer ID (see [SECURITY.md](SECURITY.md#release-signing)), macOS treats every new build as a different signed identity — **Accessibility and Automation grants do not carry over to a freshly built binary**, and TCC re-approval for the launcher app is expected after every rebuild, not just after long gaps ([docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) covers removing stale TCC entries and re-granting them).
 
 ### 2. Register with an MCP client
 
-Claude Code:
+**Plain stdio** — the client launches the binary directly. Claude Code:
 
 ```bash
-claude mcp add --scope user logic-pro -- LogicProMCP
+claude mcp add --scope user logic-pro -- /path/to/mcp_logic/.build/release/LogicProMCP
 ```
 
 Generic MCP client config (Claude Desktop, Cursor, VS Code, Codex CLI, Codex Desktop, and any other client that accepts a stdio MCP server entry — each client's own config file location and key names are documented by that client, not here):
@@ -177,13 +166,22 @@ Generic MCP client config (Claude Desktop, Cursor, VS Code, Codex CLI, Codex Des
 {
   "mcpServers": {
     "logic-pro": {
-      "command": "LogicProMCP"
+      "command": "/path/to/mcp_logic/.build/release/LogicProMCP"
     }
   }
 }
 ```
 
-If you built from source, point the command at `.build/release/LogicProMCP`.
+**HTTP/Streamable-HTTP/SSE** — for a client that needs an HTTP endpoint instead of a stdio process, this fork includes `start-logic-pro-mcp.sh` and `sse-bridge.py` at the repo root. The script locates its own directory, so it works regardless of where you cloned the repo:
+
+```bash
+./start-logic-pro-mcp.sh                # bridge on http://127.0.0.1:8765
+# POST/GET/DELETE /mcp   (Streamable HTTP)
+# GET /sse + POST /message?sessionId=…  (legacy SSE)
+# GET /health
+```
+
+`./start-logic-pro-mcp.sh --stdio` runs the plain stdio server directly (equivalent to calling the binary itself). `LOGIC_MCP_HOST`/`LOGIC_MCP_PORT`/`LOGIC_MCP_CHILD_LOG` env vars configure the bridge; see `./start-logic-pro-mcp.sh --help`. The bridge requires `python3` on `PATH` (no extra packages).
 
 ### 3. Complete Logic Pro setup
 
@@ -208,26 +206,9 @@ Ask the client:
 
 Expected: all 7 channels `ready` after full setup, or 5 if you intentionally skipped Key Commands and Scripter.
 
-### Pinned shell installer
+### Pinned shell installer, Homebrew tap
 
-The installer is **fail-closed**: it refuses to run without explicit `LOGIC_PRO_MCP_SHA256` + `LOGIC_PRO_MCP_TEAM_ID` env pins. It verifies the downloaded `LogicProMCP-macOS-universal.tar.gz` archive, so copy the SHA from that archive entry in the release's `SHA256SUMS.txt`:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/MongLong0214/logic-pro-mcp/v3.18.0/Scripts/install.sh -o install.sh
-# inspect install.sh, then:
-LOGIC_PRO_MCP_SHA256=<paste LogicProMCP-macOS-universal.tar.gz SHA256SUMS entry> \
-LOGIC_PRO_MCP_TEAM_ID=<paste team_id from RELEASE-METADATA.json> \
-bash install.sh
-```
-
-If you knowingly accept same-origin provenance (hash + Team ID fetched from the same release as the binary), opt in explicitly:
-
-```bash
-LOGIC_PRO_MCP_ALLOW_SAME_ORIGIN=1 \
-bash <(curl -fsSL https://raw.githubusercontent.com/MongLong0214/logic-pro-mcp/v3.18.0/Scripts/install.sh)
-```
-
-See [SECURITY.md §Installer trust model](SECURITY.md#installer-trust-model) for the trust tiers and threat model.
+`Scripts/install.sh` and the Homebrew formula (`Formula/logic-pro-mcp.rb`) both download a pre-built `LogicProMCP-macOS-universal.tar.gz` from a GitHub Release — a distribution channel [upstream](https://github.com/MongLong0214/logic-pro-mcp) publishes that this fork does not. Use the source build in [Install](#1-install) instead; see [SECURITY.md §Installer trust model](SECURITY.md#installer-trust-model) for the trust tiers and threat model those two channels are designed around, if you later stand up your own release pipeline.
 
 ## Permissions
 
@@ -271,7 +252,7 @@ The public surface is small and deliberate. Almost all of the module, including 
 ```swift
 // Package.swift
 dependencies: [
-    .package(url: "https://github.com/MongLong0214/logic-pro-mcp", from: "3.17.0"),
+    .package(url: "https://github.com/jordy33/mcp_logic", branch: "main"),
 ],
 targets: [
     .target(
@@ -346,7 +327,7 @@ The public docs tree is intentionally scoped: setup, API, troubleshooting, READM
 
 | Gate | What it checks | Evidence |
 |------|-----------------|----------|
-| CI (every push/PR) | Full deterministic test suite, release build, repo guards | [Actions](https://github.com/MongLong0214/logic-pro-mcp/actions/workflows/ci.yml) badge above reflects the current `main` head |
+| CI (every push/PR) | Full deterministic test suite, release build, repo guards | [Actions](https://github.com/jordy33/mcp_logic/actions/workflows/ci.yml) badge above reflects the current `main` head |
 | Release build | `swift build -c release` | Runs in CI and in the release workflow |
 | Live E2E | Registered operations against a real, running Logic Pro session with independent readback | Per-release evidence and dated observation records under `docs/observations/`, linked from the relevant CHANGELOG entries; not run for every commit |
 | README media | Actual Logic Pro screen-capture derivatives | Published under `docs/media/` |
@@ -378,7 +359,7 @@ Per-release detail lives in [CHANGELOG.md](CHANGELOG.md). Security and installer
 
 ## Registry Metadata
 
-The repository ships `server.json` for the official MCP Registry metadata path. It is pinned to the current stable release (`v3.18.0`) and carries discovery tags for Logic Pro, DAW automation, MIDI, Claude/Cursor MCP clients, and music-production agents. The record is metadata-only because the registry package schema does not yet model Homebrew formulas or GitHub release tarballs as first-class package types. The install authority remains the pinned GitHub Release/Homebrew path above.
+The repository ships `server.json` for the official MCP Registry metadata path. It is pinned to the current stable release (`v3.18.0`) and carries discovery tags for Logic Pro, DAW automation, MIDI, Claude/Cursor MCP clients, and music-production agents. The record is metadata-only because the registry package schema does not yet model Homebrew formulas or GitHub release tarballs as first-class package types, and this fork does not publish either — the install authority is the source build in [Install](#1-install) above.
 
 ## Known Limitations
 
@@ -405,6 +386,6 @@ MIT. See [LICENSE](LICENSE).
 
 ## Contributing
 
-Bug reports, PRs, and feature discussions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) and the [open issues](https://github.com/MongLong0214/logic-pro-mcp/issues?q=is%3Aissue%20is%3Aopen) for the dev workflow.
+Bug reports, PRs, and feature discussions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) and the [open issues](https://github.com/jordy33/mcp_logic/issues?q=is%3Aissue%20is%3Aopen) for the dev workflow.
 
 Security vulnerabilities: please do **not** open a public issue. See [SECURITY.md](SECURITY.md) for the private disclosure process.

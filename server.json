@@ -1,16 +1,15 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.MongLong0214/logic-pro-mcp",
+  "name": "io.github.jordy33/mcp_logic",
   "title": "Logic Pro MCP",
   "description": "Logic Pro MCP server for stateful DAW control, live readback, MIDI, plugins, and safety gates.",
-  "websiteUrl": "https://logicpromcp.com",
   "repository": {
-    "url": "https://github.com/MongLong0214/logic-pro-mcp",
+    "url": "https://github.com/jordy33/mcp_logic",
     "source": "github"
   },
   "icons": [
     {
-      "src": "https://raw.githubusercontent.com/MongLong0214/logic-pro-mcp/main/docs/media/logic-pro-mcp-thumbnail.png",
+      "src": "https://raw.githubusercontent.com/jordy33/mcp_logic/main/docs/media/logic-pro-mcp-thumbnail.png",
       "mimeType": "image/png",
       "sizes": [
         "1200x630"
@@ -22,20 +21,10 @@
     "io.modelcontextprotocol.registry/publisher-provided": {
       "distribution": {
         "status": "metadata-only",
-        "homebrew": {
-          "tap": "MongLong0214/logic-pro-mcp",
-          "formula": "logic-pro-mcp",
-          "install": [
-            "brew tap MongLong0214/logic-pro-mcp https://github.com/MongLong0214/logic-pro-mcp",
-            "brew trust monglong0214/logic-pro-mcp",
-            "brew install logic-pro-mcp"
-          ]
-        },
-        "release": "https://github.com/MongLong0214/logic-pro-mcp/releases/tag/v3.18.0",
-        "directories": {
-          "lobeHub": "https://lobehub.com/mcp/monglong0214-logic-pro-mcp",
-          "pulseMCP": "https://www.pulsemcp.com/servers/monglong-logic-pro"
-        }
+        "install": [
+          "git clone https://github.com/jordy33/mcp_logic.git",
+          "cd mcp_logic && swift build -c release"
+        ]
       },
       "discovery": {
         "categories": [

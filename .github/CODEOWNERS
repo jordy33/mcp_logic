@@ -9,9 +9,9 @@
 # What remains is worth owning on its own terms: the release workflow publishes
 # the artifact, this file decides who reviews, and Package.swift decides what
 # gets built into it.
-/.github/workflows/release.yml  @MongLong0214
-/.github/CODEOWNERS             @MongLong0214
-/Package.swift                  @MongLong0214
+/.github/workflows/release.yml  @jordy33
+/.github/CODEOWNERS             @jordy33
+/Package.swift                  @jordy33
 
 # The canonical index and the machinery that writes it.
 #
@@ -27,6 +27,6 @@
 # setting for a solo maintainer who cannot approve their own pull request. They are kept as a
 # statement of who owns these paths, and `docs/canon/README.md` says plainly that they are not a
 # control today.
-/docs/canon/                                 @MongLong0214
-/Scripts/logic_canon.py                      @MongLong0214
-/Scripts/check-canon-citations.py            @MongLong0214
+/docs/canon/                                 @jordy33
+/Scripts/logic_canon.py                      @jordy33
+/Scripts/check-canon-citations.py            @jordy33
