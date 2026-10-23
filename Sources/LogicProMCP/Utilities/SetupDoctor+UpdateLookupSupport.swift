@@ -2,7 +2,7 @@ import Foundation
 
 extension SetupDoctor {
     static func productionLatestReleaseLookup() -> UpdateOutcome {
-        let repo = "MongLong0214/logic-pro-mcp"
+        let repo = "jordy33/mcp_logic"
         let url = "https://api.github.com/repos/\(repo)/releases/latest"
         let result = runProductionCommand(
             executable: "/usr/bin/curl",

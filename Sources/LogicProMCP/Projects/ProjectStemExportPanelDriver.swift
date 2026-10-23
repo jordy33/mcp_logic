@@ -315,6 +315,7 @@ enum ProjectStemExportPanelDriver {
 
 final class AXSurface: ProjectStemExportPanelDriver.Surface, @unchecked Sendable {
     private let runtime: AXLogicProElements.Runtime
+    private let mouseRuntime: AXMouseHelper.Runtime
     private let directoryListing: @Sendable (String) -> DirectoryListing
     private let navigationNowNanos: @Sendable () -> UInt64
     private let navigationSleep: @Sendable (UInt64) -> Void
@@ -338,6 +339,7 @@ final class AXSurface: ProjectStemExportPanelDriver.Surface, @unchecked Sendable
 
     init(
         runtime: AXLogicProElements.Runtime = .production,
+        mouseRuntime: AXMouseHelper.Runtime = .production,
         directoryListing: @escaping @Sendable (String) -> DirectoryListing = { path in
             do {
                 return try FileManager.default.contentsOfDirectory(atPath: path).isEmpty
@@ -355,6 +357,7 @@ final class AXSurface: ProjectStemExportPanelDriver.Surface, @unchecked Sendable
         }
     ) {
         self.runtime = runtime
+        self.mouseRuntime = mouseRuntime
         self.directoryListing = directoryListing
         self.navigationNowNanos = navigationNowNanos
         self.navigationSleep = navigationSleep
@@ -538,12 +541,33 @@ final class AXSurface: ProjectStemExportPanelDriver.Surface, @unchecked Sendable
     func pressExport() {
         guard case let .success(assessments) = panelAssessments(),
               assessments.count == 1,
-              case let .recognized(_, export, _) = assessments[0] else {
+              case let .recognized(panel, export, _) = assessments[0] else {
             return
         }
-        // A status-zero AXPress can be a no-op and a failed status can still
-        // coincide with a real press. `drive` observes panel/progress effects.
-        _ = AXHelpers.performAction(export, kAXPressAction as String, runtime: runtime.ax)
+        // Ensure the export carries the track's current fader/pan automation rather than
+        // Logic's default raw/pre-fader signal. Measured 2026-10-23: with this checkbox at
+        // its default (unchecked), a track's exported LUFS was unchanged by a verified
+        // `logic_mixer.set_volume` write to that same track; checking it first made the
+        // export move by the expected amount. A workflow that genuinely wants the raw
+        // signal (e.g. stems for another engineer to remix) is the rarer case and is not
+        // exposed as an option by this driver today.
+        if let automationCheckbox = checkBoxes(in: panel).first(where: {
+            elementText($0) == "Include Volume/Pan Automation"
+        }), AXHelpers.getAttribute(automationCheckbox, kAXValueAttribute, runtime: runtime.ax) as Bool? != true {
+            _ = AXHelpers.performAction(automationCheckbox, kAXPressAction as String, runtime: runtime.ax)
+        }
+        // Measured 2026-10-23 on Logic Pro Creator Studio: AXPress on this Export button
+        // never actually triggers the export — the panel stays open and no file lands —
+        // while a real synthetic mouse click at its screen frame does. A status-zero click
+        // can still be a no-op; `drive` observes panel/progress effects either way, so this
+        // does not relax verification, only the actuator.
+        if let position = AXHelpers.getPosition(export, runtime: runtime.ax),
+           let size = AXHelpers.getSize(export, runtime: runtime.ax) {
+            let center = CGPoint(x: position.x + size.width / 2, y: position.y + size.height / 2)
+            AXMouseHelper.click(at: center, runtime: mouseRuntime)
+        } else {
+            _ = AXHelpers.performAction(export, kAXPressAction as String, runtime: runtime.ax)
+        }
     }
 
     /// The export progress dialog's title only LOOKS like `"Logic Pro"`. Measured
@@ -888,6 +912,10 @@ final class AXSurface: ProjectStemExportPanelDriver.Surface, @unchecked Sendable
 
     private func popupButtons(in root: AXUIElement) -> [AXUIElement] {
         AXHelpers.findAllDescendants(of: root, role: kAXPopUpButtonRole as String, maxDepth: 12, runtime: runtime.ax)
+    }
+
+    private func checkBoxes(in root: AXUIElement) -> [AXUIElement] {
+        AXHelpers.findAllDescendants(of: root, role: kAXCheckBoxRole as String, maxDepth: 12, runtime: runtime.ax)
     }
 
     private func elementText(_ element: AXUIElement) -> String? {

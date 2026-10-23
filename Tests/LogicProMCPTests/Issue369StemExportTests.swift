@@ -160,6 +160,22 @@ private final class StemExportPanelAXFixtureState: @unchecked Sendable {
     let actionEffectsOccur: Bool
     private(set) var exportActionAttempts = 0
     private(set) var cancelActionAttempts = 0
+    private(set) var exportClickAttempts = 0
+
+    /// The Export button is pressed with a real synthetic mouse click (see
+    /// `AXSurface.pressExport`), not `AXPress` — measured 2026-10-23, `AXPress` never
+    /// triggers the export on Logic Pro Creator Studio. This mirrors `performAction`'s
+    /// export-matching branch for the click's "down" half, which is the one `AXMouseHelper.
+    /// click` always posts first.
+    func recordExportClick() {
+        exportClickAttempts += 1
+        if actionEffectsOccur {
+            let progress = builder.element(99)
+            builder.setRole(progress, kAXWindowRole as String)
+            builder.setAttribute(progress, kAXTitleAttribute as String, "Logic\u{00A0}Pro")
+            builder.setAttribute(app, kAXWindowsAttribute as String, [progress])
+        }
+    }
 
     init(
         builder: FakeAXRuntimeBuilder,
@@ -200,6 +216,7 @@ private final class StemExportPanelAXFixtureState: @unchecked Sendable {
 
 private struct StemExportPanelAXFixture {
     let runtime: AXLogicProElements.Runtime
+    let mouseRuntime: AXMouseHelper.Runtime
     let state: StemExportPanelAXFixtureState
 
     init(
@@ -299,6 +316,22 @@ private struct StemExportPanelAXFixture {
             actionEffectsOccur: actionEffectsOccur
         )
         self.state = state
+        // The Export button's fixture frame is x:100,y:100,w:70,h:24 (set via
+        // `builder.setButton` above), so its center is (135, 112) — the point
+        // `AXSurface.pressExport` computes and clicks. Only the "up" half completes a
+        // click (see `AXMouseHelper.click`), so only that half is observed here.
+        let exportButtonFrame = CGRect(x: 100, y: 100, width: 70, height: 24)
+        mouseRuntime = AXMouseHelper.Runtime(
+            postMouseEvent: { eventType, point, _ in
+                if eventType == .leftMouseUp, exportButtonFrame.contains(point) {
+                    state.recordExportClick()
+                }
+                return true
+            },
+            postKeyEvent: { _ in true },
+            postUnicodeScalar: { _ in true },
+            sleepMicros: { _ in }
+        )
         runtime = builder.makeLogicRuntime(
             appElement: app,
             attributeValueResultHandler: { element, attribute in
@@ -821,7 +854,7 @@ struct Issue369StemExportTests {
             exportButtonTitle: "Export",
             cancelButtonTitle: "Cancel"
         )
-        let surface = AXSurface(runtime: fixture.runtime)
+        let surface = AXSurface(runtime: fixture.runtime, mouseRuntime: fixture.mouseRuntime)
 
         let recognised = surface.exportPanelPresence() == .present
         #expect(recognised)
@@ -830,7 +863,7 @@ struct Issue369StemExportTests {
         surface.pressExport()
         let exportEffectWasObserved = surface.progressWindowPresence() == .present
         #expect(exportEffectWasObserved)
-        #expect(fixture.state.exportActionAttempts == 1)
+        #expect(fixture.state.exportClickAttempts == 1)
 
         let cancelFixture = StemExportPanelAXFixture(
             popupValue: "One File per Track",
@@ -851,7 +884,7 @@ struct Issue369StemExportTests {
             exportButtonTitle: "내보내기",
             cancelButtonTitle: "취소"
         )
-        let surface = AXSurface(runtime: fixture.runtime)
+        let surface = AXSurface(runtime: fixture.runtime, mouseRuntime: fixture.mouseRuntime)
 
         let recognised = surface.exportPanelPresence() == .present
         #expect(recognised)

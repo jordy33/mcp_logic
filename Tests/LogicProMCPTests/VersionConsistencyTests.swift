@@ -112,13 +112,15 @@ private func latestChangelogReleaseHeading() throws -> ChangelogReleaseHeading? 
     let readme = try readRepoFile("README.md")
     let version = ServerConfig.serverVersion
     let requiredCurrentVersionReferences = [
-        "stable-v\(version)-",
-        "[v\(version)](https://github.com/MongLong0214/logic-pro-mcp/releases/tag/v\(version))",
         // The version, not an availability claim: the cut lands on main before its tag exists, and
         // Homebrew follows only once a later commit copies the published tarball's sha256.
+        //
+        // This fork (jordy33/mcp_logic) publishes neither a GitHub Release nor a Homebrew tap, so
+        // it carries no release-tag hyperlink, release-tag badge, or pinned installer curl path to
+        // keep in sync — those three upstream-only markers were dropped from this list along with
+        // the README sections that referenced them.
         "The current stable line is `v\(version)`",
         "**Current stable**: `v\(version)`",
-        "/v\(version)/Scripts/install.sh",
         "stable release (`v\(version)`)",
     ]
 
