@@ -325,20 +325,33 @@ enum ProcessUtils {
         return runtime.fallbackLogicProPID() != nil
     }
 
-    /// Check if Logic Pro has at least one visible on-screen window.
+    /// Check if Logic Pro has at least one real document window, on any Space.
     /// Uses CGWindowListCopyWindowInfo (no extra permissions needed).
+    ///
+    /// `.optionOnScreenOnly` restricts the list to the Space(s) currently on screen. Measured
+    /// 2026-10-23 against Logic Pro Creator Studio with a project ("Unicornio del segundo piso")
+    /// open and visible on a secondary display: `.optionOnScreenOnly` returned zero rows for that
+    /// PID — the window lives on a Space that was not the active one at read time — while the
+    /// unrestricted list carried it (layer 0, bounds 1660x983, name "Unicornio del segundo piso -
+    /// Tracks"), alongside several layer-0 menu-bar ghost rows the window manager keeps per Space
+    /// at bounds that are always exactly screen-width by 30pt tall. Dropping `.optionOnScreenOnly`
+    /// finds the document regardless of which Space is frontmost; the >50pt floor on both
+    /// dimensions is what keeps those menu-bar ghosts (and the small corner/status rows also seen
+    /// at this PID) from counting as a document window.
     static func hasVisibleWindow() -> Bool {
         guard let pid = logicProPID() else { return false }
-        guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+        guard let windowList = CGWindowListCopyWindowInfo([.excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
             return false
         }
         return windowList.contains { info in
             guard let ownerPID = pidValue(from: info[kCGWindowOwnerPID as String]),
                   ownerPID == pid,
+                  let layer = (info[kCGWindowLayer as String] as? NSNumber)?.intValue,
+                  layer == 0,
                   let bounds = info[kCGWindowBounds as String] as? [String: Any],
                   let width = (bounds["Width"] as? NSNumber)?.doubleValue,
                   let height = (bounds["Height"] as? NSNumber)?.doubleValue,
-                  width > 0, height > 0 else {
+                  width > 50, height > 50 else {
                 return false
             }
             return true

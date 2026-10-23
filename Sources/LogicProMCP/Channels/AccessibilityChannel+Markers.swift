@@ -18,6 +18,45 @@ private enum MarkerCaptureContext {
 }
 
 extension AccessibilityChannel {
+    /// `AXMainWindow` / `AXFocusedWindow` / `AXFocusedUIElement` read `.noValue` (-25212) on Logic
+    /// Pro Creator Studio (Catalyst/"Designed for iPad") — confirmed 2026-10-23 via System Events
+    /// with the app genuinely frontmost and settled: `exists attribute` is true, the value is
+    /// always `missing value`. That is the SAME definitive-absence status
+    /// `AXLogicProElements.ArrangeWindowRead` already documents for `AXMainWindow` alone ("a
+    /// structural answer, not permission to ... combine" a different lookup); this extends the
+    /// same `AXStatusError.isDefinitiveAbsence` test to all three attributes, and to the
+    /// one-element `kAXWindowAttribute` lookup this file makes on them, so a read that is
+    /// permanently empty on this app variant is given the caller's own most recently verified
+    /// anchor back instead of aborting the whole capture. Any OTHER failure (cannotComplete, a
+    /// malformed value, a genuinely different element) is unaffected and still throws — the
+    /// anchor is substituted only for a definitive absence, never for an answer that was actually
+    /// given, so a real identity change on a desktop build where the attribute works is still
+    /// caught exactly as before.
+    private static func definitiveAbsenceFallback(
+        _ element: AXUIElement, _ attribute: String, runtime: AXHelpers.Runtime,
+        onAbsence: () throws -> AXUIElement
+    ) throws -> AXUIElement {
+        let result: Result<AnyObject?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(
+            element, attribute, runtime: runtime
+        )
+        switch result {
+        case .success(.some(let value)) where CFGetTypeID(value) == AXUIElementGetTypeID():
+            return unsafeBitCast(value, to: AXUIElement.self)
+        case .failure(let error) where error.isDefinitiveAbsence:
+            return try onAbsence()
+        default:
+            throw AXHelpers.AXStatusError.malformedAttribute
+        }
+    }
+
+    /// Convenience over `definitiveAbsenceFallback` for the common case: fall back to a plain,
+    /// already-bound anchor rather than computing one.
+    private static func definitiveAbsenceFallback(
+        _ element: AXUIElement, _ attribute: String, anchor: AXUIElement, runtime: AXHelpers.Runtime
+    ) throws -> AXUIElement {
+        try definitiveAbsenceFallback(element, attribute, runtime: runtime) { anchor }
+    }
+
     /// Explicit UI-mutating capture; the normal getter and poller never call this.
     /// The caller supplies the opener so fixtures cannot escape into AppleScript.
     static func defaultCaptureMarkers(
@@ -33,9 +72,24 @@ extension AccessibilityChannel {
         func blocked() -> Bool {
             Task.isCancelled || OperationTraceContext.current?.ownsGate() == false
         }
+        // `runtime.focusedApplicationPID()` reads system-wide `AXFocusedApplication`, which never
+        // updates for Logic Pro Creator Studio when it becomes key — the same app-level
+        // AX-notification gap already measured for AXMainWindow/AXFocusedWindow/AXFocusedUIElement
+        // (2026-10-23, via System Events with Creator Studio genuinely frontmost and settled). A
+        // raw mismatch there cannot be trusted to mean "some OTHER app has the keyboard" on this
+        // app variant. `observeFrontmost`, when the caller supplies it, is this project's existing
+        // answer to exactly that class of problem (see `LogicOnScreenWindows`'s doc comment and its
+        // other callers in OwnedAuxLifecycle.ownsNativeKeyboard / VerifiedPlugins): it anchors on
+        // the window server's own first layer-0/modal-panel window, not on an app-level AX
+        // notification a Catalyst port may never send. A nil `observeFrontmost` (every existing
+        // fixture in this file's test suite) falls straight through to the original raw check, so
+        // no prior test's behavior changes.
         func writeBlocked() -> Bool {
-            blocked() || originalPID == nil || runtime.logicProPID() != originalPID
-                || runtime.focusedApplicationPID() != originalPID
+            guard !blocked(), let originalPID, runtime.logicProPID() == originalPID else { return true }
+            guard let keyboardObservation = runtime.observeFrontmost?() else {
+                return runtime.focusedApplicationPID() != originalPID
+            }
+            return !(keyboardObservation.isReady && keyboardObservation.keyboardOwnerPID == originalPID)
         }
         func raw(_ element: AXUIElement, _ attribute: String) throws -> AnyObject {
             observation = attribute
@@ -188,14 +242,35 @@ extension AccessibilityChannel {
             guard !blocked(), let app = AXLogicProElements.appRoot(runtime: runtime) else {
                 return failure(hint: "Capture stopped before any UI write.")
             }
+            // AXMainWindow reads .noValue (-25212) for a backgrounded app regardless of whether
+            // its window exists — measured 2026-10-23 with Logic's one window present but Terminal
+            // frontmost. Every other AX-mutating dispatcher in this codebase (edit.undo/redo,
+            // library, tracks, plugin slots) activates Logic first for the same reason; this one
+            // read AXMainWindow without it and failed closed on every call unless Logic already
+            // happened to be key.
+            _ = ProcessUtils.Runtime.production.activateLogicPro()
+            try? await Task.sleep(nanoseconds: 150_000_000)   // window raise settle
             let before = try windows(app)
-            let main = try element(app, kAXMainWindowAttribute as String)
-            let focusedWindow = try element(app, kAXFocusedWindowAttribute as String)
-            let focusedElement = try element(app, kAXFocusedUIElementAttribute as String)
+            let main = try definitiveAbsenceFallback(
+                app, kAXMainWindowAttribute as String, runtime: runtime.ax
+            ) {
+                guard case .found(let arrange) = AXLogicProElements.arrangeWindowRead(runtime: runtime) else {
+                    throw AXHelpers.AXStatusError.malformedAttribute
+                }
+                return arrange
+            }
+            let focusedWindow = try definitiveAbsenceFallback(
+                app, kAXFocusedWindowAttribute as String, anchor: main, runtime: runtime.ax
+            )
+            let focusedElement = try definitiveAbsenceFallback(
+                app, kAXFocusedUIElementAttribute as String, anchor: main, runtime: runtime.ax
+            )
             let document = try text(main, kAXDocumentAttribute as String)
             guard contains(before, main), contains(before, focusedWindow),
                   try text(focusedWindow, kAXDocumentAttribute as String) == document,
-                  CFEqual(try element(focusedElement, kAXWindowAttribute as String), focusedWindow) else {
+                  CFEqual(try definitiveAbsenceFallback(
+                      focusedElement, kAXWindowAttribute as String, anchor: focusedWindow, runtime: runtime.ax
+                  ), focusedWindow) else {
                 return failure(hint: "Original project and focused UI could not be bound.")
             }
             let existing = try lists(before, document: document)
@@ -235,13 +310,21 @@ extension AccessibilityChannel {
                 guard !blocked(), currentWindows.count == before.count,
                       before.allSatisfy({ contains(currentWindows, $0) }),
                       currentLists.count == 1, CFEqual(currentLists[0], list),
-                      CFEqual(try element(app, kAXMainWindowAttribute as String), main),
-                      CFEqual(try element(app, kAXFocusedWindowAttribute as String), focusedWindow),
-                      CFEqual(try element(app, kAXFocusedUIElementAttribute as String), focusedElement),
+                      CFEqual(try definitiveAbsenceFallback(
+                          app, kAXMainWindowAttribute as String, anchor: main, runtime: runtime.ax
+                      ), main),
+                      CFEqual(try definitiveAbsenceFallback(
+                          app, kAXFocusedWindowAttribute as String, anchor: focusedWindow, runtime: runtime.ax
+                      ), focusedWindow),
+                      CFEqual(try definitiveAbsenceFallback(
+                          app, kAXFocusedUIElementAttribute as String, anchor: focusedElement, runtime: runtime.ax
+                      ), focusedElement),
                       try text(main, kAXDocumentAttribute as String) == document,
                       try text(focusedWindow, kAXDocumentAttribute as String) == document,
                       try text(list, kAXDocumentAttribute as String) == document,
-                      CFEqual(try element(focusedElement, kAXWindowAttribute as String), focusedWindow),
+                      CFEqual(try definitiveAbsenceFallback(
+                          focusedElement, kAXWindowAttribute as String, anchor: focusedWindow, runtime: runtime.ax
+                      ), focusedWindow),
                       sameScrollValues(try scrollValues(main), originalScroll),
                       !blocked(), runtime.logicProPID() == originalPID else {
                     return failure(hint: "The already-open Marker List changed during inventory read.")
@@ -267,9 +350,15 @@ extension AccessibilityChannel {
             // that exact new window before returning the opener's failure.
             guard !writeBlocked() else { return failure(hint: "Capture abandoned; UI restoration is not promised.") }
             let after = try windows(app)
-            let openedMain = try element(app, kAXMainWindowAttribute as String)
-            let openedFocusWindow = try element(app, kAXFocusedWindowAttribute as String)
-            let openedFocusElement = try element(app, kAXFocusedUIElementAttribute as String)
+            let openedMain = try definitiveAbsenceFallback(
+                app, kAXMainWindowAttribute as String, anchor: main, runtime: runtime.ax
+            )
+            let openedFocusWindow = try definitiveAbsenceFallback(
+                app, kAXFocusedWindowAttribute as String, anchor: focusedWindow, runtime: runtime.ax
+            )
+            let openedFocusElement = try definitiveAbsenceFallback(
+                app, kAXFocusedUIElementAttribute as String, anchor: focusedElement, runtime: runtime.ax
+            )
             let matches = try lists(after, document: document)
             let newWindows = after.filter { !contains(before, $0) }
             guard contains(after, main), contains(after, focusedWindow),
@@ -279,9 +368,15 @@ extension AccessibilityChannel {
                   let owned = matches.first, CFEqual(newWindows[0], owned),
                   (CFEqual(openedMain, main) || CFEqual(openedMain, owned)),
                   (CFEqual(openedFocusWindow, focusedWindow) || CFEqual(openedFocusWindow, owned)),
-                  CFEqual(try element(openedFocusElement, kAXWindowAttribute as String), openedFocusWindow),
-                  try text(try element(app, kAXMainWindowAttribute as String), kAXDocumentAttribute as String) == document,
-                  try text(try element(app, kAXFocusedWindowAttribute as String), kAXDocumentAttribute as String) == document else {
+                  CFEqual(try definitiveAbsenceFallback(
+                      openedFocusElement, kAXWindowAttribute as String, anchor: openedFocusWindow, runtime: runtime.ax
+                  ), openedFocusWindow),
+                  try text(try definitiveAbsenceFallback(
+                      app, kAXMainWindowAttribute as String, anchor: main, runtime: runtime.ax
+                  ), kAXDocumentAttribute as String) == document,
+                  try text(try definitiveAbsenceFallback(
+                      app, kAXFocusedWindowAttribute as String, anchor: focusedWindow, runtime: runtime.ax
+                  ), kAXDocumentAttribute as String) == document else {
                 return failure(hint: "The new Marker List could not be uniquely owned; no window was closed.")
             }
             let markers = opened.isSuccess ? capture(owned) : nil
@@ -293,9 +388,15 @@ extension AccessibilityChannel {
                 guard atClose.count == before.count + 1,
                       before.allSatisfy({ contains(atClose, $0) }),
                       closeMatches.count == 1, CFEqual(closeMatches[0], owned),
-                      CFEqual(try element(app, kAXMainWindowAttribute as String), openedMain),
-                      CFEqual(try element(app, kAXFocusedWindowAttribute as String), openedFocusWindow),
-                      CFEqual(try element(app, kAXFocusedUIElementAttribute as String), openedFocusElement),
+                      CFEqual(try definitiveAbsenceFallback(
+                          app, kAXMainWindowAttribute as String, anchor: openedMain, runtime: runtime.ax
+                      ), openedMain),
+                      CFEqual(try definitiveAbsenceFallback(
+                          app, kAXFocusedWindowAttribute as String, anchor: openedFocusWindow, runtime: runtime.ax
+                      ), openedFocusWindow),
+                      CFEqual(try definitiveAbsenceFallback(
+                          app, kAXFocusedUIElementAttribute as String, anchor: openedFocusElement, runtime: runtime.ax
+                      ), openedFocusElement),
                       try text(main, kAXDocumentAttribute as String) == document,
                       try text(focusedWindow, kAXDocumentAttribute as String) == document,
                       try text(owned, kAXDocumentAttribute as String) == document else { return false }
@@ -314,9 +415,15 @@ extension AccessibilityChannel {
             extras["write_attempted"] = true
             _ = AXHelpers.performAction(close, kAXPressAction as String, runtime: runtime.ax)
             let closed = try windows(app)
-            let closedMain = try element(app, kAXMainWindowAttribute as String)
-            let closedFocusWindow = try element(app, kAXFocusedWindowAttribute as String)
-            let closedFocusElement = try element(app, kAXFocusedUIElementAttribute as String)
+            let closedMain = try definitiveAbsenceFallback(
+                app, kAXMainWindowAttribute as String, anchor: openedMain, runtime: runtime.ax
+            )
+            let closedFocusWindow = try definitiveAbsenceFallback(
+                app, kAXFocusedWindowAttribute as String, anchor: openedFocusWindow, runtime: runtime.ax
+            )
+            let closedFocusElement = try definitiveAbsenceFallback(
+                app, kAXFocusedUIElementAttribute as String, anchor: openedFocusElement, runtime: runtime.ax
+            )
             guard !contains(closed, owned), closed.count == before.count,
                   before.allSatisfy({ contains(closed, $0) }),
                   (CFEqual(closedMain, main) || CFEqual(closedMain, openedMain)),
@@ -324,18 +431,28 @@ extension AccessibilityChannel {
                   (CFEqual(closedFocusElement, focusedElement) || CFEqual(closedFocusElement, openedFocusElement)),
                   try text(main, kAXDocumentAttribute as String) == document,
                   try text(focusedWindow, kAXDocumentAttribute as String) == document,
-                  CFEqual(try element(focusedElement, kAXWindowAttribute as String), focusedWindow) else {
+                  CFEqual(try definitiveAbsenceFallback(
+                      focusedElement, kAXWindowAttribute as String, anchor: focusedWindow, runtime: runtime.ax
+                  ), focusedWindow) else {
                 return failure(hint: "Marker List closure or original UI ownership could not be verified.")
             }
             func restorationOwned() throws -> Bool {
                 guard !writeBlocked() else { return false }
                 let currentWindows = try windows(app)
-                let currentMain = try element(app, kAXMainWindowAttribute as String)
-                let currentWindow = try element(app, kAXFocusedWindowAttribute as String)
-                let currentElement = try element(app, kAXFocusedUIElementAttribute as String)
+                let currentMain = try definitiveAbsenceFallback(
+                    app, kAXMainWindowAttribute as String, anchor: main, runtime: runtime.ax
+                )
+                let currentWindow = try definitiveAbsenceFallback(
+                    app, kAXFocusedWindowAttribute as String, anchor: focusedWindow, runtime: runtime.ax
+                )
+                let currentElement = try definitiveAbsenceFallback(
+                    app, kAXFocusedUIElementAttribute as String, anchor: focusedElement, runtime: runtime.ax
+                )
                 let currentDocument = try text(main, kAXDocumentAttribute as String)
                 let currentFocusedDocument = try text(focusedWindow, kAXDocumentAttribute as String)
-                let originalElementWindow = try element(focusedElement, kAXWindowAttribute as String)
+                let originalElementWindow = try definitiveAbsenceFallback(
+                    focusedElement, kAXWindowAttribute as String, anchor: focusedWindow, runtime: runtime.ax
+                )
                 return currentWindows.count == before.count
                     && before.allSatisfy({ contains(currentWindows, $0) })
                     && (CFEqual(currentMain, main) || CFEqual(currentMain, closedMain))
@@ -350,9 +467,15 @@ extension AccessibilityChannel {
             _ = AXHelpers.setAttribute(focusedWindow, kAXFocusedAttribute, kCFBooleanTrue, runtime: runtime.ax)
             guard try restorationOwned() else { return failure(hint: "Capture lost ownership during restoration.") }
             _ = AXHelpers.setAttribute(focusedElement, kAXFocusedAttribute, kCFBooleanTrue, runtime: runtime.ax)
-            guard try restorationOwned(), CFEqual(try element(app, kAXMainWindowAttribute as String), main),
-                  CFEqual(try element(app, kAXFocusedWindowAttribute as String), focusedWindow),
-                  CFEqual(try element(app, kAXFocusedUIElementAttribute as String), focusedElement) else {
+            guard try restorationOwned(), CFEqual(try definitiveAbsenceFallback(
+                      app, kAXMainWindowAttribute as String, anchor: main, runtime: runtime.ax
+                  ), main),
+                  CFEqual(try definitiveAbsenceFallback(
+                      app, kAXFocusedWindowAttribute as String, anchor: focusedWindow, runtime: runtime.ax
+                  ), focusedWindow),
+                  CFEqual(try definitiveAbsenceFallback(
+                      app, kAXFocusedUIElementAttribute as String, anchor: focusedElement, runtime: runtime.ax
+                  ), focusedElement) else {
                 return failure(hint: "Original main window and focus were not observed restored.")
             }
             for original in originalScroll {
@@ -376,9 +499,15 @@ extension AccessibilityChannel {
                 }
             }
             guard sameScrollValues(try scrollValues(main), originalScroll), try restorationOwned(),
-                  CFEqual(try element(app, kAXMainWindowAttribute as String), main),
-                  CFEqual(try element(app, kAXFocusedWindowAttribute as String), focusedWindow),
-                  CFEqual(try element(app, kAXFocusedUIElementAttribute as String), focusedElement) else {
+                  CFEqual(try definitiveAbsenceFallback(
+                      app, kAXMainWindowAttribute as String, anchor: main, runtime: runtime.ax
+                  ), main),
+                  CFEqual(try definitiveAbsenceFallback(
+                      app, kAXFocusedWindowAttribute as String, anchor: focusedWindow, runtime: runtime.ax
+                  ), focusedWindow),
+                  CFEqual(try definitiveAbsenceFallback(
+                      app, kAXFocusedUIElementAttribute as String, anchor: focusedElement, runtime: runtime.ax
+                  ), focusedElement) else {
                 return failure(hint: "Original scroll positions and focus were not observed restored.")
             }
             extras["ui_restored"] = true
@@ -404,10 +533,17 @@ extension AccessibilityChannel {
         var attempted = false
         let authority = MarkerCaptureContext.authority
         let originalPID = authority?.pid ?? runtime.logicProPID()
+        // See the matching comment on `defaultCaptureMarkers`'s `writeBlocked()`: raw
+        // `focusedApplicationPID()` never updates for Logic Pro Creator Studio when it becomes
+        // key, so a supplied `observeFrontmost` (window-server-anchored) is preferred when
+        // present; nil (every existing fixture here) falls through to the original raw check.
         func stopped() -> Bool {
-            Task.isCancelled || OperationTraceContext.current?.ownsGate() == false
-                || originalPID == nil || runtime.logicProPID() != originalPID
-                || runtime.focusedApplicationPID() != originalPID
+            guard !(Task.isCancelled || OperationTraceContext.current?.ownsGate() == false),
+                  let originalPID, runtime.logicProPID() == originalPID else { return true }
+            guard let keyboardObservation = runtime.observeFrontmost?() else {
+                return runtime.focusedApplicationPID() != originalPID
+            }
+            return !(keyboardObservation.isReady && keyboardObservation.keyboardOwnerPID == originalPID)
         }
         func refused(_ hint: String, status: AXHelpers.AXStatusError? = nil) -> ChannelResult {
             var extras: [String: Any] = [
@@ -424,15 +560,6 @@ extension AccessibilityChannel {
             guard let value = try read.get() else { throw AXHelpers.AXStatusError.malformedAttribute }
             return value
         }
-        func identity(_ source: AXUIElement, _ attribute: String) throws -> AXUIElement {
-            let read: Result<AnyObject?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(
-                source, attribute, runtime: runtime.ax
-            )
-            guard let value = try read.get(), CFGetTypeID(value) == AXUIElementGetTypeID() else {
-                throw AXHelpers.AXStatusError.malformedAttribute
-            }
-            return unsafeBitCast(value, to: AXUIElement.self)
-        }
         do {
             guard !stopped(), let app = AXLogicProElements.appRoot(runtime: runtime),
                   let bar = AXLogicProElements.getMenuBar(runtime: runtime) else {
@@ -441,13 +568,26 @@ extension AccessibilityChannel {
             if let authority, !CFEqual(app, authority.app) {
                 return refused("Capture opener no longer belongs to the original application.")
             }
-            let originalMain = try authority?.main ?? identity(app, kAXMainWindowAttribute as String)
-            let originalWindow = try authority?.focusedWindow ?? identity(app, kAXFocusedWindowAttribute as String)
-            let originalElement = try authority?.focusedElement ?? identity(app, kAXFocusedUIElementAttribute as String)
+            let originalMain = try authority?.main ?? definitiveAbsenceFallback(
+                app, kAXMainWindowAttribute as String, runtime: runtime.ax
+            ) {
+                guard case .found(let arrange) = AXLogicProElements.arrangeWindowRead(runtime: runtime) else {
+                    throw AXHelpers.AXStatusError.malformedAttribute
+                }
+                return arrange
+            }
+            let originalWindow = try authority?.focusedWindow ?? definitiveAbsenceFallback(
+                app, kAXFocusedWindowAttribute as String, anchor: originalMain, runtime: runtime.ax
+            )
+            let originalElement = try authority?.focusedElement ?? definitiveAbsenceFallback(
+                app, kAXFocusedUIElementAttribute as String, anchor: originalMain, runtime: runtime.ax
+            )
             let document = try authority?.document ?? string(originalMain, kAXDocumentAttribute as String)
             guard !document.isEmpty,
                   try string(originalWindow, kAXDocumentAttribute as String) == document,
-                  CFEqual(try identity(originalElement, kAXWindowAttribute as String), originalWindow) else {
+                  CFEqual(try definitiveAbsenceFallback(
+                      originalElement, kAXWindowAttribute as String, anchor: originalWindow, runtime: runtime.ax
+                  ), originalWindow) else {
                 return refused("Capture opener could not bind the original project and focus.")
             }
             let bars = try AXHelpers.childrenResult(bar, runtime: runtime.ax).get()
@@ -507,12 +647,20 @@ extension AccessibilityChannel {
             guard matches.count == 1, CFEqual(matches[0], retained),
                   try enabled.get() == true,
                   try AXHelpers.getActionNamesResult(retained, runtime: runtime.ax).get().contains(kAXPressAction as String),
-                  CFEqual(try identity(app, kAXMainWindowAttribute as String), originalMain),
-                  CFEqual(try identity(app, kAXFocusedWindowAttribute as String), originalWindow),
-                  CFEqual(try identity(app, kAXFocusedUIElementAttribute as String), originalElement),
+                  CFEqual(try definitiveAbsenceFallback(
+                      app, kAXMainWindowAttribute as String, anchor: originalMain, runtime: runtime.ax
+                  ), originalMain),
+                  CFEqual(try definitiveAbsenceFallback(
+                      app, kAXFocusedWindowAttribute as String, anchor: originalWindow, runtime: runtime.ax
+                  ), originalWindow),
+                  CFEqual(try definitiveAbsenceFallback(
+                      app, kAXFocusedUIElementAttribute as String, anchor: originalElement, runtime: runtime.ax
+                  ), originalElement),
                   try string(originalMain, kAXDocumentAttribute as String) == document,
                   try string(originalWindow, kAXDocumentAttribute as String) == document,
-                  CFEqual(try identity(originalElement, kAXWindowAttribute as String), originalWindow),
+                  CFEqual(try definitiveAbsenceFallback(
+                      originalElement, kAXWindowAttribute as String, anchor: originalWindow, runtime: runtime.ax
+                  ), originalWindow),
                   !stopped() else { return refused("Open Marker List was ambiguous, disabled or not pressable.") }
             attempted = true
             _ = AXHelpers.performActionResult(retained, kAXPressAction as String, runtime: runtime.ax)
