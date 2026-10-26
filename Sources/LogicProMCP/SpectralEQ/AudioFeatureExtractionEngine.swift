@@ -439,7 +439,8 @@ enum AudioFeatureExtractionEngine {
         guard realpath(resolved, &buffer) != nil else {
             throw FeatureExtractionError.unreadable("could not resolve the validated input")
         }
-        let physical = String(cString: buffer)
+        let physical = String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) },
+                               as: UTF8.self)
         guard URL(fileURLWithPath: physical).standardizedFileURL.path == resolved else {
             throw FeatureExtractionError.pathIdentityChanged
         }

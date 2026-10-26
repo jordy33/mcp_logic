@@ -472,6 +472,7 @@ struct StockPluginCatalogTests {
             "logic.stock.effect.channel_eq",
             "logic.stock.effect.compressor",
             "logic.stock.effect.gain",
+            "logic.stock.effect.limiter",
         ])
         for entry in insertable {
             #expect(
@@ -487,6 +488,18 @@ struct StockPluginCatalogTests {
         let nonInsertable = snapshot.entries.first { $0.id == "logic.stock.effect.chromaverb" }
         #expect(nonInsertable?.safeWriteCapabilities == StockPluginSafeWriteCapability.none)
         #expect(AccessibilityChannel.pluginInsertSpec(named: "ChromaVerb") == nil)
+    }
+
+    @Test("the legacy unverified insert surface does not inherit the verified allowlist")
+    func legacyInsertSurfaceStaysNarrow() {
+        // Limiter is verified-insertable (post-insert inventory readback) but is NOT offered on
+        // the legacy `logic_mixer.insert_plugin` path, which has no such readback.
+        #expect(AccessibilityChannel.pluginInsertSpec(named: "Limiter") != nil)
+        #expect(AccessibilityChannel.legacyInsertPluginSpec(named: "Limiter") == nil)
+        #expect(AccessibilityChannel.legacyInsertPluginSpec(named: "limiter") == nil)
+        for name in ["Gain", "Compressor", "Channel EQ"] {
+            #expect(AccessibilityChannel.legacyInsertPluginSpec(named: name) != nil, "\(name)")
+        }
     }
 
     @Test("Compressor threshold percent aliases preserve the legacy raw scale")

@@ -192,8 +192,8 @@ actor TargetRegistry {
                     && binding.topologyGeneration == topologyGeneration
                     && binding.physicalMixerStrip?.matches(physicalMixerStrip) == true
             }
-            return
-            binding.physicalTrack == nil && binding.physicalMixerStrip == nil && binding.kind == kind
+            return binding.physicalTrack == nil && binding.physicalMixerStrip == nil
+                && binding.kind == kind
                 && binding.serverSessionID == serverSessionID
                 && binding.projectEpoch == projectEpoch
                 && binding.topologyGeneration == topologyGeneration

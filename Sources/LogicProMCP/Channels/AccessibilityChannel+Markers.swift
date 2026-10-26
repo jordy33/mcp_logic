@@ -41,7 +41,7 @@ extension AccessibilityChannel {
         )
         switch result {
         case .success(.some(let value)) where CFGetTypeID(value) == AXUIElementGetTypeID():
-            return unsafeBitCast(value, to: AXUIElement.self)
+            return unsafeDowncast(value, to: AXUIElement.self)
         case .failure(let error) where error.isDefinitiveAbsence:
             return try onAbsence()
         default:
@@ -104,7 +104,7 @@ extension AccessibilityChannel {
             guard CFGetTypeID(value) == AXUIElementGetTypeID() else {
                 throw AXHelpers.AXStatusError.malformedAttribute
             }
-            return unsafeBitCast(value, to: AXUIElement.self)
+            return unsafeDowncast(value, to: AXUIElement.self)
         }
         func text(_ source: AXUIElement, _ attribute: String) throws -> String {
             guard let value = try raw(source, attribute) as? String, !value.isEmpty else {
@@ -121,7 +121,7 @@ extension AccessibilityChannel {
                 guard CFGetTypeID(item) == AXUIElementGetTypeID() else {
                     throw AXHelpers.AXStatusError.malformedAttribute
                 }
-                let window = unsafeBitCast(item, to: AXUIElement.self)
+                let window = unsafeDowncast(item, to: AXUIElement.self)
                 guard !result.contains(where: { CFEqual($0, window) }) else {
                     throw AXHelpers.AXStatusError.malformedAttribute
                 }

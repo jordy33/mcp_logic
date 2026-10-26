@@ -128,6 +128,15 @@ extension OperationRegistry {
         "a stable target reference is resolved against the target registry; a stale or ill-formed one answers stale_target_reference")
     private static let projectRef = ParamRule.unconstrained(
         "the project reference is compared with the open project; a mismatch answers its own refusal")
+    /// T2: the master Stereo Output strip has no Arrange index, so `strip:"output"` is the only
+    /// other selector. Any other value is invalid_params, and supplying it together with `track`
+    /// is invalid_params (two selectors). Operations that need a `target_ref` do not read it.
+    private static let outputStripSelector = ParamRule.unconstrained(
+        "only \"output\" is accepted; any other value is invalid_params, and supplying it with track is invalid_params",
+        sample: .string("output"))
+    /// The selector alternatives for a plugin write: an Arrange index, a stable target reference,
+    /// or the output strip itself (`strip:"output"`).
+    private static let pluginSelectorGroup = ["track", "target_ref", "strip"]
     private static func index(_ sample: Int = 0) -> ParamRule { .enforced(.integer, .int(sample)) }
     private static let port = ParamRule.enforced(.string, .string("midi"), allowed: MIDIDispatcher.validPorts.sorted())
     private static let channel = ParamRule.enforced(.integer, .int(1))
@@ -165,7 +174,7 @@ extension OperationRegistry {
     ]
     /// Values that pass the channel's checks up to the front-document comparison.
     private static let pluginWriteSamples: [String: Value] = [
-        "track": .int(0), "insert": .int(0), "slot": .int(0), "plugin": .string("Gain"), "plugin_id": .string("Gain"),
+        "track": .int(0), "strip": .string("output"), "insert": .int(0), "slot": .int(0), "plugin": .string("Gain"), "plugin_id": .string("Gain"),
         "plugin_name": .string("Gain"), "param": .string("Gain"), "band": .string("Low Cut"),
         "parameter": .string("Frequency"), "value": .int(0), "unit": .string("Hz"), "mode": .string("duplicate_applyback"),
         "project_expected_path": .string("/tmp/lpm-957.logicx"),
@@ -175,6 +184,7 @@ extension OperationRegistry {
         "path": .string("/tmp/lpm-957.logicx"), "project": .string("/tmp/lpm-957.logicx"),
         "projects": .array([.string("/tmp/lpm-957.logicx")]),
         "output_root": .string("/tmp/lpm-957-out"), "outputRoot": .string("/tmp/lpm-957-out"),
+        "stem_scope": .string("per_track"),
     ]
 
     /// Commands with parameters. A command with none has no entry.
@@ -444,7 +454,12 @@ extension OperationRegistry {
             "plugins.get_inventory": .init(params: Dictionary(uniqueKeysWithValues: ["index", "track", "track_index"].map {
                 ($0, ParamRule.unconstrained("omitted when it does not read as an integer; the channel then refuses the request",
                                              sample: .int(0)))
-            }).merging(["reveal_mixer": .enforced(.boolean, .bool(false))],uniquingKeysWith:{ _,new in new }), required: [["index", "track", "track_index"]]),
+            }).merging([
+                // The master Stereo Output strip has no Arrange index; `strip:"output"` is the
+                // only other selector, and the channel refuses it together with `track`.
+                "strip": outputStripSelector,
+                "reveal_mixer": .enforced(.boolean, .bool(false)),
+            ],uniquingKeysWith:{ _,new in new }), required: [["index", "track", "track_index", "strip"]]),
             "plugins.get_param_verified": .init(params: [
                 "target_ref": .enforced(.string, .string("ins_lpm_contract_955")), "project_ref": projectRef,
                 "param": .enforced(.string, .string("threshold")),
@@ -453,6 +468,9 @@ extension OperationRegistry {
                 "plugin_id": .enforced(.string, .string("logic.stock.effect.compressor")),
                 "plugin_name": .enforced(.string, .string("Compressor")),
                 "track": .enforced(.integer, .int(0)),
+                // Admitted by the registry, refused by the dispatcher: a parameter read needs a
+                // plugin-insert target_ref, and no reference is issued for the output strip.
+                "strip": outputStripSelector,
                 "insert": .enforced(.integer, .int(6)),
             ], required: [["target_ref"], ["param"]]),
             "plugins.get_channel_eq_state_verified": .init(params: [
@@ -461,6 +479,7 @@ extension OperationRegistry {
                 "plugin_id": .enforced(.string, .string("logic.stock.effect.channel_eq")),
                 "plugin_name": .enforced(.string, .string("Channel EQ")),
                 "track": .enforced(.integer, .int(0)), "insert": .enforced(.integer, .int(0)),
+                "strip": outputStripSelector,
                 "project_expected_path": .enforced(.string, .string("/tmp/lpm-301.logicx")),
             ], required: [["target_ref"]]),
             "plugins.plan_parameter_changes": .init(params: [
@@ -470,8 +489,9 @@ extension OperationRegistry {
                 "plugin_id": .enforced(.string, .string("logic.stock.effect.compressor")),
                 "plugin_name": .enforced(.string, .string("Compressor")),
                 "track": .enforced(.integer, .int(0)), "insert": .enforced(.integer, .int(6)),
+                "strip": outputStripSelector,
             ], required: [["target_ref"], ["changes"]]),
-            "plugins.insert_verified": .init(params: pluginWriteRules(["insert", "slot", "plugin", "plugin_id", "plugin_name", "mode", "project_expected_path", "track"])
+            "plugins.insert_verified": .init(params: pluginWriteRules(["insert", "slot", "plugin", "plugin_id", "plugin_name", "mode", "project_expected_path", "strip", "track"])
                 .merging([
                     "expected_name": .unconstrained("corroborates a bare track index, which is refused without it "
                                                     + "(index_binding_corroboration_required); a text value beside a "
@@ -479,16 +499,16 @@ extension OperationRegistry {
                                                     sample: .string("Track 1")),
                     "target_ref": targetRef, "project_ref": projectRef,
                 ]) { _, new in new },
-                required: [["track", "target_ref"], ["insert", "slot", "target_ref"], ["plugin", "plugin_id", "plugin_name"],
+                required: [pluginSelectorGroup, ["insert", "slot", "target_ref"], ["plugin", "plugin_id", "plugin_name"],
                            ["expected_name", "target_ref"], ["mode"], ["project_expected_path"]]),
-            "plugins.set_eq_band_verified": .init(params: pluginWriteRules(["band", "insert", "mode", "parameter", "project_expected_path", "track", "unit", "value"],
+            "plugins.set_eq_band_verified": .init(params: pluginWriteRules(["band", "insert", "mode", "parameter", "project_expected_path", "strip", "track", "unit", "value"],
                                                                          reasons: channelEQReasons)
                 .merging(["target_ref": targetRef, "project_ref": projectRef]) { _, new in new },
-                required: [["track", "target_ref"], ["insert", "target_ref"], ["band"], ["parameter"], ["value"],
+                required: [pluginSelectorGroup, ["insert", "target_ref"], ["band"], ["parameter"], ["value"],
                            ["unit"], ["mode"], ["project_expected_path"]]),
-            "plugins.set_param_verified": .init(params: pluginWriteRules(["insert", "mode", "param", "plugin", "plugin_id", "plugin_name", "project_expected_path", "track", "unit", "value"])
+            "plugins.set_param_verified": .init(params: pluginWriteRules(["insert", "mode", "param", "plugin", "plugin_id", "plugin_name", "project_expected_path", "strip", "track", "unit", "value"])
                 .merging(["target_ref": targetRef, "project_ref": projectRef]) { _, new in new },
-                required: [["track", "target_ref"], ["insert", "target_ref"], ["plugin", "plugin_id", "plugin_name"], ["param"],
+                required: [pluginSelectorGroup, ["insert", "target_ref"], ["plugin", "plugin_id", "plugin_name"], ["param"],
                            ["value"], ["mode"], ["project_expected_path"]]),
 
             // logic_project
@@ -544,7 +564,7 @@ extension OperationRegistry {
         for op in ["export_plan", "export_run", "export_resume"] {
             var params = Dictionary(uniqueKeysWithValues: [
                 "artifact", "artifacts", "collision_policy", "kind", "naming_policy", "outputRoot", "output_root",
-                "path", "project", "projects",
+                "path", "project", "projects", "stem_scope",
             ].map { ($0, ParamRule.unconstrained("checked by ProjectExportPlanner.plan, whose refusals are not yet recorded by kind",
                                                  sample: exportSamples[$0])) })
             if op != "export_plan" { params["confirmed"] = .enforced(.boolean, .bool(false)) }

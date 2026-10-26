@@ -5,13 +5,29 @@ struct ProjectExportBounceHelperResult: Sendable, Equatable {
     let artifactPath: String?
     let error: String?
     let bounceFired: Bool
+    /// Row label -> observed value, verbatim from the Bounce dialog, read immediately before the
+    /// OK press. `nil` means the helper did not report them (an older helper on disk, or a failure
+    /// before the dialog opened) — never "the dialog had no settings".
+    let settings: [String: String]?
 
-    static func success(_ path: String, bounceFired: Bool = true) -> ProjectExportBounceHelperResult {
-        ProjectExportBounceHelperResult(artifactPath: path, error: nil, bounceFired: bounceFired)
+    static func success(
+        _ path: String,
+        bounceFired: Bool = true,
+        settings: [String: String]? = nil
+    ) -> ProjectExportBounceHelperResult {
+        ProjectExportBounceHelperResult(
+            artifactPath: path, error: nil, bounceFired: bounceFired, settings: settings
+        )
     }
 
-    static func failure(_ error: String, bounceFired: Bool = false) -> ProjectExportBounceHelperResult {
-        ProjectExportBounceHelperResult(artifactPath: nil, error: error, bounceFired: bounceFired)
+    static func failure(
+        _ error: String,
+        bounceFired: Bool = false,
+        settings: [String: String]? = nil
+    ) -> ProjectExportBounceHelperResult {
+        ProjectExportBounceHelperResult(
+            artifactPath: nil, error: error, bounceFired: bounceFired, settings: settings
+        )
     }
 }
 

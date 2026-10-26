@@ -106,7 +106,7 @@ struct MixerDispatcher: OperationTraceDispatching {
             case .failure(let result): return result
             case .success(let resolved):
                 guard let physical = resolved.binding?.physicalMixerStrip, let reference = resolved.reference,
-                      let targetRegistry else {
+                      targetRegistry != nil else {
                     return TargetRefResolver.staleTargetReferenceResult(params["target_ref"]?.stringValue, operation: operation)
                 }
                 let traceID = writing ? await startTraceIfEnabled(command: command) : nil
@@ -613,7 +613,7 @@ struct MixerDispatcher: OperationTraceDispatching {
                 )
             }
             let pluginName = stringParam(params, "plugin_name", "plugin", "name")
-            guard let spec = AccessibilityChannel.pluginInsertSpec(named: pluginName) else {
+            guard let spec = AccessibilityChannel.legacyInsertPluginSpec(named: pluginName) else {
                 return toolInvalidParamsResult(
                     "insert_plugin unsupported plugin '\(pluginName)'. Supported stock plugins: Gain, Compressor, Channel EQ",
                     extras: ["operation": "mixer.insert_plugin"]

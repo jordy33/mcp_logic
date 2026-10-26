@@ -78,6 +78,17 @@ struct ProjectExportRunArtifact: Codable, Sendable, Equatable {
     /// that an entry created after the before snapshot was produced by Logic
     /// rather than a concurrent writer.
     let observedStemOutputs: [ProjectExportObservedStemOutput]?
+    /// Effective settings read off the Bounce dialog immediately before the OK press, when this
+    /// artifact came from the path-directed bounce helper. `nil` on every non-bounce artifact and
+    /// on a bounce whose helper did not report them.
+    let bounceSettings: [String: String]?
+    /// `"ok"` when `bounceSettings` is present, `"unreadable"` when this artifact came from the
+    /// bounce helper and it reported none. `nil` when the artifact is not a helper bounce.
+    let bounceSettingsReadStatus: String?
+    /// Run-level notes that did not lower this artifact's own state. A per-track stem whose
+    /// pre-run selection could not be proven restored is State A for its file and carries a
+    /// warning here — the file was written and analyzed; the user's selection may have moved.
+    let warnings: [String]?
 
     enum CodingKeys: String, CodingKey {
         case kind
@@ -91,6 +102,9 @@ struct ProjectExportRunArtifact: Codable, Sendable, Equatable {
         case evidence
         case subject
         case observedStemOutputs = "observed_stem_outputs"
+        case bounceSettings = "bounce_settings"
+        case bounceSettingsReadStatus = "bounce_settings_read_status"
+        case warnings
     }
 
     init(
@@ -104,7 +118,10 @@ struct ProjectExportRunArtifact: Codable, Sendable, Equatable {
         reason: String?,
         evidence: ProjectExportArtifactEvidence?,
         subject: ProjectExportStemSubject? = nil,
-        observedStemOutputs: [ProjectExportObservedStemOutput]? = nil
+        observedStemOutputs: [ProjectExportObservedStemOutput]? = nil,
+        bounceSettings: [String: String]? = nil,
+        bounceSettingsReadStatus: String? = nil,
+        warnings: [String]? = nil
     ) {
         self.kind = kind
         self.path = path
@@ -117,6 +134,9 @@ struct ProjectExportRunArtifact: Codable, Sendable, Equatable {
         self.evidence = evidence
         self.subject = subject
         self.observedStemOutputs = observedStemOutputs
+        self.bounceSettings = bounceSettings
+        self.bounceSettingsReadStatus = bounceSettingsReadStatus
+        self.warnings = warnings
     }
 }
 

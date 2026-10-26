@@ -43,6 +43,10 @@ enum VerifiedPluginCatalog {
         "noise gate": "logic.stock.effect.noise_gate",
         "noisegate": "logic.stock.effect.noise_gate",
         "logic.stock.effect.noise_gate": "logic.stock.effect.noise_gate",
+        // Insert-only: the aliases let `insert_verified` resolve the plug-in and let a future
+        // parameter read name it. No parameter alias is registered because none round-tripped.
+        "limiter": "logic.stock.effect.limiter",
+        "logic.stock.effect.limiter": "logic.stock.effect.limiter",
     ]
 
     /// Per-plugin parameter-key alias table: caller key → canonical catalog

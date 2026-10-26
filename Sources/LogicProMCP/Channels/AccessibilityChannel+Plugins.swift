@@ -43,9 +43,31 @@ extension AccessibilityChannel {
                 aliases: ["Channel EQ"],
                 menuPaths: insertPaths([["Channel EQ"], ["EQ", "Channel EQ"]])
             )
+        // Mastering chain. `Adaptive Limiter` is a DIFFERENT stock plug-in and is not
+        // matched here: the switch is an exact string, and no prefix matching is used.
+        case "limiter":
+            return PluginInsertSpec(
+                canonicalName: "Limiter",
+                aliases: ["Limiter"],
+                menuPaths: insertPaths([["Dynamics", "Limiter"]])
+            )
         default:
             return nil
         }
+    }
+
+    /// The legacy, unverified `logic_mixer.insert_plugin` surface.
+    ///
+    /// Deliberately a strict SUBSET of `pluginInsertSpec`: verified insertion
+    /// (`logic_plugins.insert_verified`) proves the plug-in landed in the requested slot by an
+    /// inventory readback, and the legacy path does not. Widening one must never widen the other,
+    /// so a plug-in is added to the legacy surface only by an explicit second edit.
+    private static let legacyInsertExcludedPlugins: Set<String> = ["limiter"]
+
+    static func legacyInsertPluginSpec(named rawName: String) -> PluginInsertSpec? {
+        let normalized = rawName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !legacyInsertExcludedPlugins.contains(normalized) else { return nil }
+        return pluginInsertSpec(named: rawName)
     }
 
     static func defaultInsertPlugin(
@@ -76,7 +98,7 @@ extension AccessibilityChannel {
         let configuration = (params["configuration"] ?? params["channel_configuration"])?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard let pluginName = params["plugin_name"] ?? params["plugin"] ?? params["name"],
-              let spec = pluginInsertSpec(named: pluginName) else {
+              let spec = legacyInsertPluginSpec(named: pluginName) else {
             let requestedPluginName: Any
             if let rawPluginName = params["plugin_name"] ?? params["plugin"] ?? params["name"] {
                 requestedPluginName = rawPluginName

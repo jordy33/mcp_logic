@@ -76,6 +76,9 @@ struct ProjectExportPlanArtifact: Codable, Sendable, Equatable {
     /// `true` for stems. Logic, not the planner, assigns the eventual file
     /// names, so callers must not interpret `path` as a file path in that case.
     let filenamesLateBound: Bool?
+    /// Which export a `stem` artifact drives. Absent for every other kind, and
+    /// absent means `.allTracks` for a plan written before this field existed.
+    let stemScope: StemExportScope?
     /// Human-readable explanation for a late-bound planning refusal.
     let planningReason: String?
 
@@ -88,7 +91,29 @@ struct ProjectExportPlanArtifact: Codable, Sendable, Equatable {
         case destination
         case subjects
         case filenamesLateBound = "filenames_late_bound"
+        case stemScope = "stem_scope"
         case planningReason = "planning_reason"
+    }
+}
+
+/// How a `stem` artifact addresses its subjects.
+///
+/// `allTracks` is one panel export for the whole project: the files that appear
+/// cannot be attributed to a subject, so every subject stays State B.
+/// `perTrack` drives one export per subject with a proven-exclusive selection, so
+/// each new file's provenance is fixed before it exists — that is what allows a
+/// per-subject State A.
+enum StemExportScope: String, Codable, Sendable, Equatable {
+    case allTracks = "all_tracks"
+    case perTrack = "per_track"
+
+    var planningPhrase: String {
+        switch self {
+        case .allTracks:
+            return "one batch export for the whole project"
+        case .perTrack:
+            return "one export per subject, each driven with a proven-exclusive track selection"
+        }
     }
 }
 

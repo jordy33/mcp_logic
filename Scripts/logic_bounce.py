@@ -33,7 +33,10 @@ from logic_bounce_ui import (
     bounce_focus_diagnostics,
     bounce_project_identity,
     bounce_settings_present,
+    bounce_settings_readback,
+    cancel_bounce_settings,
     click_bounce_settings_confirm,
+    normalize_state,
     open_bounce_dialog,
     osa,
     save_panel_present,
@@ -193,6 +196,28 @@ def main() -> int:
         result["error"] = "bounce_dialog_did_not_appear"
         result.update(bounce_focus_diagnostics())
         print(json.dumps(result)); return 1
+
+    # 2b. Read the settings the dialog is about to apply, BEFORE pressing anything.
+    #
+    # `bounce_settings_present` proves the dialog is here by finding marker strings; it cannot say
+    # which control holds which value. A bounce whose Normalize state was never read is an
+    # unverified deliverable however well the audio analyzes, so the values travel back in the
+    # helper's JSON and the one state that silently changes the render's level is refused.
+    settings = bounce_settings_readback()
+    if settings:
+        result["bounce_settings"] = settings
+        normalize = normalize_state(settings)
+        result["bounce_normalize"] = normalize
+        if normalize == "on":
+            cancel_bounce_settings()
+            result["success"] = False
+            result["error"] = "bounce_normalize_enabled"
+            result["bounce_fired"] = False
+            print(json.dumps(result)); return 1
+    else:
+        # Not a refusal by itself: the dialog may expose no individually readable controls. The
+        # absence is reported so a caller never reads it as "settings were off".
+        result["bounce_normalize"] = "unknown"
 
     # 3. OK on the (AX-accessible) settings dialog -> save panel
     if not click_bounce_settings_confirm():

@@ -196,7 +196,7 @@ extension AccessibilityChannel {
                 if !atWindow {
                     guard case .success(.some(let rawParent)) = readings[1],
                           CFGetTypeID(rawParent) == AXUIElementGetTypeID() else { return nil }
-                    parent = unsafeBitCast(rawParent, to: AXUIElement.self)
+                    parent = unsafeDowncast(rawParent, to: AXUIElement.self)
                 }
             }
             return path
@@ -341,7 +341,7 @@ extension AccessibilityChannel {
                 lost = true; return false
             }
             let windows = AXHelpers.decodeChildrenArray(windowValues)
-            let main = unsafeBitCast(mainValue, to: AXUIElement.self)
+            let main = unsafeDowncast(mainValue, to: AXUIElement.self)
             let focusedWindowMatches: Bool
             if AccessibilityChannel.routingFocusedWindowMatches(application[3],
                 window: window, ownedPopup: ownedPopup, mixer: mixer, runtime: logic.ax) {
@@ -612,9 +612,9 @@ extension AccessibilityChannel {
                   case .success(.some(let rawWindow)) = finalApp[2], CFGetTypeID(rawWindow) == AXUIElementGetTypeID() else {
                 lost = true; return false
             }
-            let final = unsafeBitCast(rawFocus, to: AXUIElement.self)
-            let main = unsafeBitCast(rawMain, to: AXUIElement.self)
-            let focusedWindow = unsafeBitCast(rawWindow, to: AXUIElement.self)
+            let final = unsafeDowncast(rawFocus, to: AXUIElement.self)
+            let main = unsafeDowncast(rawMain, to: AXUIElement.self)
+            let focusedWindow = unsafeDowncast(rawWindow, to: AXUIElement.self)
             guard
                   CFEqual(final, expectedFocus),
                   CFEqual(main, window),
@@ -703,7 +703,7 @@ extension AccessibilityChannel {
                 guard CFArrayGetCount(array) == 1 else { return .unverified }
                 let element = unsafeBitCast(CFArrayGetValueAtIndex(array, 0), to: CFTypeRef.self)
                 guard CFGetTypeID(element) == AXUIElementGetTypeID() else { return .unverified }
-                let child = unsafeBitCast(element, to: AXUIElement.self)
+                let child = unsafeDowncast(element, to: AXUIElement.self)
                 // Renew reciprocal membership after the relationship read: a
                 // retired child can retain its old parent and CF identity.
                 guard let current = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: mixer, runtime: logic.ax),

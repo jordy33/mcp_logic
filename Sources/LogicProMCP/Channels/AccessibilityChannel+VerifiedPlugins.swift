@@ -175,8 +175,51 @@ extension AccessibilityChannel {
         revealMixer: MixerRevealAction = ensureMixerAreaVisibleForInventory
     ) async -> ChannelResult {
         let operation = "logic_plugins.get_inventory"
-        guard let trackRaw = params["track"] ?? params["track_index"] ?? params["index"],
-              let track = Int(trackRaw), track >= 0 else {
+        // The master Stereo Output strip has no Arrange index, so `strip:"output"` selects it
+        // instead. Exactly one selector is accepted: a request carrying both cannot say which
+        // strip was read.
+        let outputStrip = params["strip"] == "output"
+        let trackRaw = params["track"] ?? params["track_index"] ?? params["index"]
+        guard outputStrip || trackRaw != nil else {
+            return .error(HonestContract.encodeV2StateC(
+                error: .invalidParams,
+                extras: [
+                    "operation": operation,
+                    "what_was_attempted": "read insert chain inventory",
+                    "what_was_observed": "missing 'track' (expected Int >= 0) or strip:\"output\"",
+                    "safe_to_retry": false,
+                ]
+            ))
+        }
+        guard !(outputStrip && trackRaw != nil) else {
+            return .error(HonestContract.encodeV2StateC(
+                error: .invalidParams,
+                extras: [
+                    "operation": operation,
+                    "what_was_attempted": "read insert chain inventory",
+                    "what_was_observed": "both 'track' and strip:\"output\" were supplied; exactly one selector is accepted",
+                    "safe_to_retry": false,
+                ]
+            ))
+        }
+        if let strip = params["strip"], strip != "output" {
+            // Only the measured selector is accepted. Any other strip kind (aux, bus, vca,
+            // master) has its own identity question and is not addressed here.
+            return .error(HonestContract.encodeV2StateC(
+                error: .invalidParams,
+                extras: [
+                    "operation": operation,
+                    "what_was_observed": "unknown 'strip' value \(strip); only \"output\" is supported",
+                    "safe_to_retry": false,
+                ]
+            ))
+        }
+        let track: Int?
+        if outputStrip {
+            track = nil
+        } else if let trackRaw, let parsed = Int(trackRaw), parsed >= 0 {
+            track = parsed
+        } else {
             return .error(HonestContract.encodeV2StateC(
                 error: .invalidParams,
                 extras: [
@@ -187,6 +230,11 @@ extension AccessibilityChannel {
                 ]
             ))
         }
+        // Every envelope below names its target: `track: null, strip: "output"` can never be
+        // mistaken for track 0, and a track read can never be mistaken for the master strip.
+        let trackEcho: Any = track.map { $0 as Any } ?? NSNull()
+        let stripEcho: Any = outputStrip ? "output" : NSNull()
+        let targetLabel = track.map { "track \($0)" } ?? "the master Stereo Output strip"
 
         let fetchedAt = ISO8601DateFormatter.cacheFormatter.string(from: Date())
         let revealRequested: Bool
@@ -218,15 +266,16 @@ extension AccessibilityChannel {
                 reason: .readbackUnavailable,
                 extras: [
                     "operation": operation,
-                    "track": track,
+                    "track": trackEcho,
+                    "strip": stripEcho,
                     "plugins_source": "ax",
                     "plugins_fetched_at": fetchedAt,
                     "plugins_unknown_reason": "ax_subtree_unreadable",
                     "mixer_reveal_attempted": reveal.attempted,
                     "mixer_reveal_strategies": reveal.strategies,
                     "what_was_attempted": reveal.attempted
-                        ? "reveal the mixer, then read insert chain inventory for track \(track)"
-                        : "read insert chain inventory for track \(track)",
+                        ? "reveal the mixer, then read insert chain inventory for \(targetLabel)"
+                        : "read insert chain inventory for \(targetLabel)",
                     "what_was_observed": "the mixer's children did not read",
                     "safe_to_retry": true,
                 ]
@@ -238,7 +287,8 @@ extension AccessibilityChannel {
                 reason: .readbackUnavailable,
                 extras: [
                     "operation": operation,
-                    "track": track,
+                    "track": trackEcho,
+                    "strip": stripEcho,
                     "plugins_source": "ax",
                     "plugins_fetched_at": fetchedAt,
                     "plugins_unknown_reason": reveal.windowUnavailable ? "logic_window_unavailable" : "mixer_not_visible",
@@ -248,8 +298,8 @@ extension AccessibilityChannel {
                     "mixer_reveal_menu_clicked": reveal.menuClicked,
                     "mixer_reveal_key_sent": reveal.keySent,
                     "what_was_attempted": reveal.attempted
-                        ? "reveal the mixer, then read insert chain inventory for track \(track)"
-                        : "read insert chain inventory for track \(track)",
+                        ? "reveal the mixer, then read insert chain inventory for \(targetLabel)"
+                        : "read insert chain inventory for \(targetLabel)",
                     "what_was_observed": reveal.windowUnavailable
                         ? "Logic's window or modal state could not be observed safely; no Mixer reveal was attempted"
                         : reveal.attempted
@@ -265,19 +315,27 @@ extension AccessibilityChannel {
         }
         var bindingRefusal: String?
         var failingHeader: Int?
-        guard let target = AXPluginTrackBinding.resolve(track: track, mixer: mixer, runtime: runtime,
-            onRefusal:{ bindingRefusal = $0 }, onRefusalHeaderIndex:{ failingHeader = $0 }) else {
+        let resolvedTarget: AXPluginTrackBinding.Binding?
+        if let track {
+            resolvedTarget = AXPluginTrackBinding.resolve(track: track, mixer: mixer, runtime: runtime,
+                onRefusal:{ bindingRefusal = $0 }, onRefusalHeaderIndex:{ failingHeader = $0 })
+        } else {
+            resolvedTarget = AXPluginTrackBinding.resolveOutputStrip(mixer: mixer, runtime: runtime,
+                onRefusal:{ bindingRefusal = $0 })
+        }
+        guard let target = resolvedTarget else {
             return .success(HonestContract.encodeV2StateB(
                 reason: .readbackUnavailable,
                 extras: [
                     "operation": operation,
-                    "track": track,
+                    "track": trackEcho,
+                    "strip": stripEcho,
                     "plugins_source": "ax",
                     "plugins_fetched_at": fetchedAt,
                     "plugins_unknown_reason": "ax_subtree_unreadable",
                     "binding_refusal_reason": bindingRefusal ?? "binding_unavailable",
                     "binding_refusal_header_index": failingHeader.map { $0 as Any } ?? NSNull(),
-                    "what_was_attempted": "read insert chain inventory for track \(track)",
+                    "what_was_attempted": "read insert chain inventory for \(targetLabel)",
                     "what_was_observed": pluginTrackBindingFailureDetail(mixer: mixer, runtime: runtime),
                     "safe_to_retry": true,
                 ]
@@ -289,12 +347,13 @@ extension AccessibilityChannel {
                 reason: .readbackUnavailable,
                 extras: [
                     "operation": operation,
-                    "track": track,
+                    "track": trackEcho,
+                    "strip": stripEcho,
                     "plugins_source": "ax",
                     "plugins_fetched_at": fetchedAt,
                     "plugins_unknown_reason": "ax_subtree_unreadable",
-                    "what_was_attempted": "read insert chain inventory for track \(track)",
-                    "what_was_observed": "the mixer strip for track \(track) was located but its children did not read",
+                    "what_was_attempted": "read insert chain inventory for \(targetLabel)",
+                    "what_was_observed": "the mixer strip for \(targetLabel) was located but its children did not read",
                     "safe_to_retry": true,
                 ]
             ))
@@ -310,14 +369,15 @@ extension AccessibilityChannel {
                 reason: .readbackUnavailable,
                 extras: [
                     "operation": operation,
-                    "track": track,
+                    "track": trackEcho,
+                    "strip": stripEcho,
                     "plugins_source": "ax",
                     "plugins_fetched_at": fetchedAt,
                     "plugins_unknown_reason": "insert_section_not_enumerable",
                     "mixer_reveal_attempted": reveal.attempted,
                     "mixer_reveal_strategies": reveal.strategies,
-                    "what_was_attempted": "read insert chain inventory for track \(track)",
-                    "what_was_observed": "the mixer strip for track \(track) was located but "
+                    "what_was_attempted": "read insert chain inventory for \(targetLabel)",
+                    "what_was_observed": "the mixer strip for \(targetLabel) was located but "
                         + "exposed 0 enumerable insert-slot elements",
                     "recovery_hint": insertSectionNotEnumerableRecoveryHint,
                     "safe_to_retry": true,
@@ -335,7 +395,8 @@ extension AccessibilityChannel {
                 reason: .readbackUnavailable,
                 extras: [
                     "operation": operation,
-                    "track": track,
+                    "track": trackEcho,
+                    "strip": stripEcho,
                     "plugins_source": "ax",
                     "plugins_fetched_at": fetchedAt,
                     "plugins_unknown_reason": "occupied_insert_name_unreadable",
@@ -351,7 +412,8 @@ extension AccessibilityChannel {
 
         return .success(HonestContract.encodeV2StateA(extras: [
             "operation": operation,
-            "track": track,
+            "track": trackEcho,
+                    "strip": stripEcho,
             "plugins_source": "ax",
             "plugins_fetched_at": fetchedAt,
             "plugins_unknown_reason": NSNull(),
@@ -2143,7 +2205,25 @@ extension AccessibilityChannel {
     ) async -> ChannelResult {
 
         // Step 1 — schema / params (presence, type, range, unit).
-        guard let trackRaw = params["track"], let track = Int(trackRaw), track >= 0 else {
+        //
+        // The master Stereo Output strip has no Arrange index, so `strip:"output"` selects it. The
+        // two selectors are mutually exclusive: a write that names both cannot say which strip was
+        // authorized.
+        let outputStrip = params["strip"] == "output"
+        if let strip = params["strip"], strip != "output" {
+            return .error(invalidParamsStateC(
+                operation, "unknown 'strip' value \(strip); only \"output\" is supported"))
+        }
+        let track: Int?
+        if outputStrip {
+            guard params["track"] == nil else {
+                return .error(invalidParamsStateC(
+                    operation, "both 'track' and strip:\"output\" were supplied; exactly one selector is accepted"))
+            }
+            track = nil
+        } else if let trackRaw = params["track"], let parsed = Int(trackRaw), parsed >= 0 {
+            track = parsed
+        } else {
             return .error(invalidParamsStateC(operation, "missing or invalid 'track' (Int >= 0)"))
         }
         guard let insertRaw = params["insert"], let insert = Int(insertRaw), insert >= 0 else {
@@ -2172,7 +2252,11 @@ extension AccessibilityChannel {
         let mode = params["mode"] ?? ""
 
         var preResolutionIdentity = selector.preResolutionIdentity
-        preResolutionIdentity["track_index"] = track
+        if let track {
+            preResolutionIdentity["track_index"] = track
+        } else {
+            preResolutionIdentity["strip"] = "output"
+        }
 
         // Steps 2-3 — mode + project path gate (precedence: path-mismatch wins
         // over a later unsupported-param, AC23).
@@ -2194,7 +2278,7 @@ extension AccessibilityChannel {
         // `stale_target_reference` instead of a wrong-target write during the
         // state-cache latency window. Absent (explicit-index path) it is a no-op,
         // so the default/flag-off behaviour is byte-invariant.
-        if let guardResult = targetTrackNameGuard(
+        if let track, let guardResult = targetTrackNameGuard(
             operation: operation,
             track: track,
             expectedTrackName: params["expected_track_name"],
@@ -2256,7 +2340,8 @@ extension AccessibilityChannel {
         requested: Double,
         unit: String?,
         operation: String,
-        track: Int,
+        // `nil` addresses the master Stereo Output strip, which has no Arrange index.
+        track: Int?,
         insert: Int,
         entryLookup: VerifiedPluginCatalog.EntryLookup,
         paramAliasLookup: VerifiedPluginCatalog.ParamAliasLookup,
@@ -2704,7 +2789,8 @@ extension AccessibilityChannel {
     private static func performVerifiedParameterAccess(
         operation: String,
         referenceParams: [String: String],
-        track: Int,
+        // `nil` addresses the master Stereo Output strip, which has no Arrange index.
+        track: Int?,
         insert: Int,
         pluginID: String,
         paramKey: String,
@@ -2793,7 +2879,13 @@ extension AccessibilityChannel {
                 mixerLookup.childrenUnread ? "the mixer's children did not read" : "mixer area was not locatable"
             ))
         }
-        guard let target = AXPluginTrackBinding.resolve(track: track, mixer: mixer, runtime: runtime) else {
+        let resolvedTarget: AXPluginTrackBinding.Binding?
+        if let track {
+            resolvedTarget = AXPluginTrackBinding.resolve(track: track, mixer: mixer, runtime: runtime)
+        } else {
+            resolvedTarget = AXPluginTrackBinding.resolveOutputStrip(mixer: mixer, runtime: runtime)
+        }
+        guard let target = resolvedTarget else {
             return .error(incompleteInventoryStateC(operation, identity,
                 pluginTrackBindingFailureDetail(mixer: mixer, runtime: runtime)))
         }
@@ -2805,14 +2897,19 @@ extension AccessibilityChannel {
         // then confirm the target header reads back as selected (a write that the
         // AX API accepted vacuously must not be trusted — v3.0.9 lesson).
         if !access.isRead {
-        guard AXLogicProElements.selectTrackViaAX(at: track, runtime: runtime) else {
-            return .error(trackSelectionFailedStateC(operation, identity, "AX track selection write failed for track \(track)"))
-        }
-        guard await verifiedTrackSelected(track: track, runtime: runtime) else {
-            return .error(trackSelectionFailedStateC(
-                operation, identity,
-                "track \(track) selection could not be verified via AXSelected readback"
-            ))
+        // The master Stereo Output strip is not an Arrange track: there is no selection ladder to
+        // run, and driving one would select a different strip. Its identity is retained through
+        // the strip binding alone.
+        if let track {
+            guard AXLogicProElements.selectTrackViaAX(at: track, runtime: runtime) else {
+                return .error(trackSelectionFailedStateC(operation, identity, "AX track selection write failed for track \(track)"))
+            }
+            guard await verifiedTrackSelected(track: track, runtime: runtime) else {
+                return .error(trackSelectionFailedStateC(
+                    operation, identity,
+                    "track \(track) selection could not be verified via AXSelected readback"
+                ))
+            }
         }
         guard await AXPluginTrackBinding.waitUntilStable(target, runtime: runtime) else {
             return .error(HonestContract.encodeV2StateC(
@@ -4535,15 +4632,32 @@ extension AccessibilityChannel {
         guard let mixer = authorizedPluginTrack?.mixer ?? AXLogicProElements.getMixerArea(runtime: runtime) else {
             onRefusal?("mixer_unavailable"); return nil
         }
-        guard let target = AXPluginTrackBinding.resolve(
-            track: track, mixer: mixer, runtime: runtime, onRefusal: onRefusal
-        ) else { return nil }
+        let target: AXPluginTrackBinding.Binding?
+        if authorizedPluginTrack?.trackIndex == nil, authorizedPluginTrack != nil {
+            // Output-strip write. The negative sentinel is the driver seam's only way to say "no
+            // Arrange index"; a real index here would address a different strip entirely.
+            guard track < 0 else { onRefusal?("strip_target_conflict"); return nil }
+            target = AXPluginTrackBinding.resolveOutputStrip(mixer: mixer, runtime: runtime, onRefusal: onRefusal)
+        } else {
+            guard track >= 0 else { onRefusal?("invalid_track_index"); return nil }
+            target = AXPluginTrackBinding.resolve(track: track, mixer: mixer, runtime: runtime, onRefusal: onRefusal)
+        }
+        guard let target else { return nil }
         if let original = authorizedPluginTrack {
             guard original.trackIndex == target.trackIndex,
                   original.trackName.utf8.elementsEqual(target.trackName.utf8) else {
                 onRefusal?("retained_track_mismatch"); return nil
             }
-            guard CFEqual(original.header, target.header) else {
+            // CFEqual(nil, nil) is false, so the header comparison is made only when both sides
+            // have one. The master Stereo Output strip has no Arrange header at all.
+            switch (original.header, target.header) {
+            case let (originalHeader?, targetHeader?):
+                guard CFEqual(originalHeader, targetHeader) else {
+                    onRefusal?("retained_header_mismatch"); return nil
+                }
+            case (nil, nil):
+                break
+            default:
                 onRefusal?("retained_header_mismatch"); return nil
             }
             guard CFEqual(original.strip, target.strip) else {
@@ -4646,7 +4760,8 @@ extension AccessibilityChannel {
         operation: String,
         identity: [String: Any],
         pluginID: String,
-        track: Int,
+        // `nil` names the master Stereo Output strip, which has no Arrange index.
+        track: Int?,
         insert: Int,
         conflictingInsertIndices: [Int],
         matchingEditorCount: Int
@@ -4660,13 +4775,15 @@ extension AccessibilityChannel {
                 "conflicting_insert_indices": conflictingInsertIndices,
                 "matching_editor_count_before_press": matchingEditorCount,
                 "what_was_attempted": "confirm no \(pluginID) editor was already open before pressing insert \(insert)",
-                "what_was_observed": "\(matchingEditorCount) matching \(pluginID) editor(s) were already open on track \(track)",
+                "what_was_observed": "\(matchingEditorCount) matching \(pluginID) editor(s) were already open on "
+                    + (track.map { "track \($0)" } ?? "the master Stereo Output strip"),
                 // A duplicated plug-in can only be bound by opening its editor
                 // from a known-empty state, so an already-open editor is the one
                 // thing the caller must clear. This operation closes the editors
                 // it opens, so reaching here means either a human opened one or a
                 // previous close could not be verified.
-                "recovery_hint": "Close the open \(pluginID) editor(s) on track \(track), then retry. "
+                "recovery_hint": "Close the open \(pluginID) editor(s) on "
+                    + (track.map { "track \($0)" } ?? "the master Stereo Output strip") + ", then retry. "
                     + "While the plug-in occupies more than one insert, its editor must be "
                     + "opened by this operation for the write to be attributable to insert \(insert).",
                 "safe_to_retry": false,
@@ -4679,7 +4796,8 @@ extension AccessibilityChannel {
         operation: String,
         identity: [String: Any],
         pluginID: String,
-        track: Int,
+        // `nil` names the master Stereo Output strip, which has no Arrange index.
+        track: Int?,
         insert: Int,
         conflictingInsertIndices: [Int],
         matchingEditorCount: Int,
@@ -4695,7 +4813,8 @@ extension AccessibilityChannel {
                 "matching_editor_count_after_press": matchingEditorCount,
                 "new_matching_editor_count_after_press": newlyObservedMatchingEditorCount,
                 "what_was_attempted": "press insert \(insert)'s open control once and observe exactly one newly created \(pluginID) editor",
-                "what_was_observed": "the one target-slot press left \(matchingEditorCount) matching \(pluginID) editor(s), \(newlyObservedMatchingEditorCount) newly observed, visible on track \(track)",
+                "what_was_observed": "the one target-slot press left \(matchingEditorCount) matching \(pluginID) editor(s), \(newlyObservedMatchingEditorCount) newly observed, visible on "
+                    + (track.map { "track \($0)" } ?? "the master Stereo Output strip"),
                 "safe_to_retry": false,
                 "write_attempted": false,
             ]
@@ -5355,6 +5474,13 @@ extension AccessibilityChannel {
     /// so the gate→outcome→envelope mapping is unit-testable without ever issuing
     /// real AX actions (custom opener + AXPick); the production default (`liveExactSlotPopupInsert`)
     /// is the only path that touches the live UI.
+    /// What the insert driver's `track` argument carries when the authorized target is the master
+    /// Stereo Output strip, which has no Arrange index. The driver seam keeps `Int` so its shape
+    /// and every existing fake stay unchanged; `boundPluginTrack` is the only reader that
+    /// interprets a negative value, and it only does so while `authorizedPluginTrack` holds a
+    /// strip binding with no track index. No operation that takes a caller `track` may pass this.
+    static let outputStripDriverSentinel = -1
+
     typealias PluginInsertDriver = @Sendable (
         _ track: Int,
         _ insert: Int,
@@ -5407,8 +5533,26 @@ extension AccessibilityChannel {
     ) async -> ChannelResult {
         let operation = "logic_plugins.insert_verified"
 
-        // Step 1 — schema.
-        guard let trackRaw = params["track"], let track = Int(trackRaw), track >= 0 else {
+        // Step 1 — schema. The master Stereo Output strip has no Arrange index, so
+        // `strip:"output"` selects it. The two selectors are mutually exclusive: a request carrying
+        // both cannot say which strip the insert was authorized against.
+        let outputStrip = params["strip"] == "output"
+        if let strip = params["strip"], strip != "output" {
+            return .error(invalidParamsStateC(
+                operation, "unknown 'strip' value \(strip); only \"output\" is supported"))
+        }
+        let track: Int
+        if outputStrip {
+            guard params["track"] == nil else {
+                return .error(invalidParamsStateC(
+                    operation, "both 'track' and strip:\"output\" were supplied; exactly one selector is accepted"))
+            }
+            // The driver seam keeps its `track: Int` shape; a negative sentinel says "the retained
+            // strip binding, not an Arrange index". `boundPluginTrack` is the only reader of it.
+            track = Self.outputStripDriverSentinel
+        } else if let trackRaw = params["track"], let parsed = Int(trackRaw), parsed >= 0 {
+            track = parsed
+        } else {
             return .error(invalidParamsStateC(operation, "missing or invalid 'track' (Int >= 0)"))
         }
         guard let insertRaw = params["insert"], let insert = Int(insertRaw), insert >= 0 else {
@@ -5420,10 +5564,9 @@ extension AccessibilityChannel {
         }
         let mode = params["mode"] ?? ""
 
-        let preResolutionIdentity: [String: Any] = [
-            "track_index": track,
-            "plugin_id_requested": pluginAlias,
-        ]
+        let preResolutionIdentity: [String: Any] = outputStrip
+            ? ["strip": "output", "plugin_id_requested": pluginAlias]
+            : ["track_index": track, "plugin_id_requested": pluginAlias]
 
         // Steps 2-3 — mode + project path gate.
         if let gate = await verifiedModeAndPathGate(
@@ -5465,7 +5608,7 @@ extension AccessibilityChannel {
                 ]
             ))
         }
-        let identity = resolvedIdentity(track: track, insert: insert, pluginID: pluginID)
+        let identity = resolvedIdentity(track: outputStrip ? nil : track, insert: insert, pluginID: pluginID)
 
         // Step 5 — inventory must be complete + slot must be verified-empty
         // before an insert is even considered (R3/R7, AC5).
@@ -5490,7 +5633,18 @@ extension AccessibilityChannel {
                 mixerLookup.childrenUnread ? "the mixer's children did not read" : "mixer area was not locatable"
             )
         }
-        guard let target = AXPluginTrackBinding.resolve(track: track, mixer: mixer, runtime: runtime) else {
+        let resolvedTarget: AXPluginTrackBinding.Binding?
+        if outputStrip {
+            var refusal: String?
+            resolvedTarget = AXPluginTrackBinding.resolveOutputStrip(
+                mixer: mixer, runtime: runtime, onRefusal: { refusal = $0 })
+            guard resolvedTarget != nil else {
+                return refuseBeforeInsert(refusal ?? "output_strip_unavailable")
+            }
+        } else {
+            resolvedTarget = AXPluginTrackBinding.resolve(track: track, mixer: mixer, runtime: runtime)
+        }
+        guard let target = resolvedTarget else {
             return refuseBeforeInsert(pluginTrackBindingFailureDetail(mixer: mixer, runtime: runtime))
         }
         if let refusal = pluginReferenceBindingGuard(
@@ -5809,8 +5963,10 @@ extension AccessibilityChannel {
     ///      unreadable pre-inventory refuses before slot actuation; unreadable post-inventory
     ///      is the retry-able `.readbackUnavailable` after the plugin leaf was chosen.
     static let liveExactSlotPopupInsert: PluginInsertDriver = { track, insert, pluginID, searchQuery, runtime in
+        let outputStripWrite = authorizedPluginTrack?.trackIndex == nil && authorizedPluginTrack != nil
         var trace: [String: Any] = [
-            "requested_track": track,
+            "requested_track": outputStripWrite ? NSNull() : track,
+            "requested_strip": outputStripWrite ? "output" : NSNull(),
             "requested_insert": insert,
             "requested_plugin_id": pluginID,
             "search_query": searchQuery,
@@ -5822,20 +5978,27 @@ extension AccessibilityChannel {
         trace["plugin_windows_hidden"] = await hideAllPluginWindows(runtime: runtime)
         try? await Task.sleep(for: .milliseconds(150))
 
-        let trackSelected = AXLogicProElements.selectTrackViaAX(at: track, runtime: runtime)
-        trace["track_select_ok"] = trackSelected
-        let selectedVerified = trackSelected
-            ? await verifiedTrackSelected(track: track, runtime: runtime)
-            : false
-        trace["track_select_verified"] = selectedVerified
-        guard selectedVerified else {
-            return (
-                .trackSelectionFailed(trackSelected
-                    ? "track \(track) selection could not be verified via AXSelected readback"
-                    : "AX track selection write failed for track \(track)"
-                ),
-                trace
-            )
+        if outputStripWrite {
+            // The master Stereo Output strip is not an Arrange track: there is nothing to select,
+            // and running the track-selection ladder here would either fail or select something
+            // else. Identity is retained through the strip binding instead.
+            trace["track_select_skipped"] = "output_strip_has_no_arrange_track"
+        } else {
+            let trackSelected = AXLogicProElements.selectTrackViaAX(at: track, runtime: runtime)
+            trace["track_select_ok"] = trackSelected
+            let selectedVerified = trackSelected
+                ? await verifiedTrackSelected(track: track, runtime: runtime)
+                : false
+            trace["track_select_verified"] = selectedVerified
+            guard selectedVerified else {
+                return (
+                    .trackSelectionFailed(trackSelected
+                        ? "track \(track) selection could not be verified via AXSelected readback"
+                        : "AX track selection write failed for track \(track)"
+                    ),
+                    trace
+                )
+            }
         }
         try? await Task.sleep(for: .milliseconds(150))
 
@@ -7256,9 +7419,11 @@ extension AccessibilityChannel {
         )
     }
 
-    private static func resolvedIdentity(track: Int, insert: Int, pluginID: String) -> [String: Any] {
+    /// The master Stereo Output strip has no Arrange index; `track_index: null` says so rather
+    /// than borrowing track 0's number for a strip track 0 does not own.
+    private static func resolvedIdentity(track: Int?, insert: Int, pluginID: String) -> [String: Any] {
         [
-            "track_index": track,
+            "track_index": track.map { $0 as Any } ?? NSNull(),
             "insert": insert,
             "plugin_id": pluginID,
         ]

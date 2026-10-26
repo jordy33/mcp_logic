@@ -739,7 +739,7 @@ enum OperationRegistry {
             DeadlineClass.short,
             VerificationPolicy.none,
             TargetPolicy.none,
-            ["index", "track", "track_index", "reveal_mixer"]
+            ["index", "strip", "track", "track_index", "reveal_mixer"]
         ),
         (
             .pluginsGetParamVerified,
@@ -748,7 +748,7 @@ enum OperationRegistry {
             DeadlineClass.medium,
             VerificationPolicy.readbackRequired,
             TargetPolicy.acceptsStableTarget,
-            ["insert", "param", "plugin", "plugin_id", "plugin_name", "track", "unit"]
+            ["insert", "param", "plugin", "plugin_id", "plugin_name", "strip", "track", "unit"]
         ),
         (
             .pluginsGetChannelEQStateVerified,
@@ -757,7 +757,7 @@ enum OperationRegistry {
             DeadlineClass.medium,
             VerificationPolicy.readbackRequired,
             TargetPolicy.acceptsStableTarget,
-            ["insert", "plugin", "plugin_id", "plugin_name", "project_expected_path", "track"]
+            ["insert", "plugin", "plugin_id", "plugin_name", "project_expected_path", "strip", "track"]
         ),
         (
             .pluginsPlanParameterChanges,
@@ -766,7 +766,7 @@ enum OperationRegistry {
             DeadlineClass.medium,
             VerificationPolicy.readbackRequired,
             TargetPolicy.acceptsStableTarget,
-            ["changes", "insert", "plugin", "plugin_id", "plugin_name", "track"]
+            ["changes", "insert", "plugin", "plugin_id", "plugin_name", "strip", "track"]
         ),
         (
             .pluginsSetParamVerified,
@@ -777,7 +777,7 @@ enum OperationRegistry {
             TargetPolicy.acceptsStableTarget,
             [
                 "insert", "mode", "param", "plugin", "plugin_id", "plugin_name",
-                "project_expected_path", "track", "unit", "value",
+                "project_expected_path", "strip", "track", "unit", "value",
             ]
         ),
         (
@@ -789,7 +789,7 @@ enum OperationRegistry {
             TargetPolicy.acceptsStableTarget,
             [
                 "band", "insert", "mode", "parameter", "project_expected_path",
-                "track", "unit", "value",
+                "strip", "track", "unit", "value",
             ]
         ),
         (
@@ -801,7 +801,7 @@ enum OperationRegistry {
             TargetPolicy.acceptsStableTarget,
             [
                 "insert", "mode", "plugin", "plugin_id", "plugin_name", "project_expected_path",
-                "slot", "track",
+                "slot", "strip", "track",
             ]
         ),
     ] as [(OperationID, String, Mutability, DeadlineClass, VerificationPolicy, TargetPolicy, Set<String>)]).map { entry in
@@ -879,7 +879,7 @@ enum OperationRegistry {
             DeadlineClass.short,
             [
                 "artifact", "artifacts", "collision_policy", "kind", "naming_policy",
-                "outputRoot", "output_root", "path", "project", "projects",
+                "outputRoot", "output_root", "path", "project", "projects", "stem_scope",
             ]
         ),
         (
@@ -891,7 +891,7 @@ enum OperationRegistry {
             DeadlineClass.long,
             [
                 "artifact", "artifacts", "collision_policy", "confirmed", "kind", "naming_policy",
-                "outputRoot", "output_root", "path", "project", "projects",
+                "outputRoot", "output_root", "path", "project", "projects", "stem_scope",
             ]
         ),
         (
@@ -903,7 +903,7 @@ enum OperationRegistry {
             DeadlineClass.long,
             [
                 "artifact", "artifacts", "collision_policy", "confirmed", "kind", "naming_policy",
-                "outputRoot", "output_root", "path", "project", "projects",
+                "outputRoot", "output_root", "path", "project", "projects", "stem_scope",
             ]
         ),
         (.projectAudit, "audit", Mutability.readOnly, ConfirmationPolicy.none, VerificationPolicy.none, DeadlineClass.short, []),

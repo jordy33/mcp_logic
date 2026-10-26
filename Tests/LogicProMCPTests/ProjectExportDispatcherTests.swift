@@ -106,7 +106,7 @@ struct ProjectExportDispatcherTests {
         let secondOutput = outputRoot.appendingPathComponent("opaque-bass.wav")
         let panelReached = BoolFlag()
         var options = fastOptions(identity: { project.path })
-        options.driveStemExport = { _ in
+        options.driveStemExport = { _, _, _ in
             panelReached.set()
             _ = try? writeToneWav(at: firstOutput)
             _ = try? writeToneWav(at: secondOutput)

@@ -1509,7 +1509,14 @@ enum StockPluginCatalog {
         fx("deesser_2", "DeEsser 2", "Dynamics"),
         fx("enveloper", "Enveloper", "Dynamics"),
         fx("expander", "Expander", "Dynamics"),
-        fx("limiter", "Limiter", "Dynamics"),
+        // Insert-only for now. Verification is the post-insert inventory readback
+        // (`logic_plugins.insert_verified`), which is a State A precondition on its own.
+        // No parameter is declared: a Controls-view read of this plug-in was never taken,
+        // and a declared range with no round trip behind it is exactly the shape the
+        // Compressor's evidence-backed rows exist to avoid.
+        fx("limiter", "Limiter", "Dynamics", write: .insertOnly,
+           notes: ["Insertable through Audio FX > Dynamics > Limiter; verified by the post-insert inventory readback."]),
+
         fx("multipressor", "Multipressor", "Dynamics"),
         fx("noise_gate", "Noise Gate", "Dynamics"),
         // Reverb

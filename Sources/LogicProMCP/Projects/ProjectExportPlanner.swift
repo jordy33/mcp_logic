@@ -18,6 +18,7 @@ enum ProjectExportPlanner {
             throw ExportPlanError.invalid("collision_policy must be fail_if_exists or skip_existing")
         }
         let namingPolicy = try namingPolicy(from: params)
+        let stemScope = try stemExportScope(from: params, artifactKinds: artifacts)
         try validateStemRequest(
             projects: projects,
             artifactKinds: artifacts,
@@ -36,7 +37,8 @@ enum ProjectExportPlanner {
                 artifactKinds: artifacts,
                 collisionPolicy: collisionPolicy,
                 fileManager: fileManager,
-                stemSubjects: stemSubjects
+                stemSubjects: stemSubjects,
+                stemScope: stemScope
             )
         }
 
@@ -94,7 +96,8 @@ enum ProjectExportPlanner {
         artifactKinds: [String],
         collisionPolicy: String,
         fileManager: FileManager,
-        stemSubjects: ProjectExportStemSubjectInventory?
+        stemSubjects: ProjectExportStemSubjectInventory?,
+        stemScope: StemExportScope
     ) -> ProjectExportPlanProject {
         var issues: [String] = []
         if !AppleScriptSafety.isValidProjectPath(path, requireExisting: false) {
@@ -114,7 +117,8 @@ enum ProjectExportPlanner {
                 collisionPolicy: collisionPolicy,
                 fileManager: fileManager,
                 projectPath: path,
-                stemSubjects: stemSubjects
+                stemSubjects: stemSubjects,
+                stemScope: stemScope
             )
         }
 
@@ -137,7 +141,8 @@ enum ProjectExportPlanner {
         collisionPolicy: String,
         fileManager: FileManager,
         projectPath: String,
-        stemSubjects: ProjectExportStemSubjectInventory?
+        stemSubjects: ProjectExportStemSubjectInventory?,
+        stemScope: StemExportScope
     ) -> ProjectExportPlanArtifact {
         if kind == "stem" {
             return stemArtifact(
@@ -145,6 +150,7 @@ enum ProjectExportPlanner {
                 collisionPolicy: collisionPolicy,
                 projectPath: projectPath,
                 stemSubjects: stemSubjects,
+                stemScope: stemScope,
                 fileManager: fileManager
             )
         }
@@ -213,6 +219,7 @@ enum ProjectExportPlanner {
             destination: nil,
             subjects: nil,
             filenamesLateBound: nil,
+            stemScope: nil,
             planningReason: nil
         )
     }
@@ -224,6 +231,7 @@ enum ProjectExportPlanner {
         collisionPolicy: String,
         projectPath: String,
         stemSubjects: ProjectExportStemSubjectInventory?,
+        stemScope: StemExportScope,
         fileManager: FileManager
     ) -> ProjectExportPlanArtifact {
         let existingAudio = ProjectExportArtifactPathPolicy.supportedAudioEntries(
@@ -278,12 +286,43 @@ enum ProjectExportPlanner {
                 "issue_29": "not_run_in_dry_run",
                 "filenames": "late_bound_assigned_by_logic",
                 "eligible_output_rule": "top-level non-directory entry with suffix wav|wave|aif|aiff|aifc|m4a|mp3",
+                "stem_scope": stemScope.rawValue,
+                // A stem plan never promises a file list. What it does promise differs by
+                // scope, and the dry run says which: all-tracks cannot attribute a file to a
+                // subject, per-track fixes each file's provenance before it exists.
+                "stem_scope_plan": stemScope == .perTrack
+                    ? "no_file_list_promised: \(subjects?.count ?? 0) export(s), one per subject, each driven with a proven-exclusive selection of that subject"
+                    : "no_file_list_promised: one batch export for the whole project; file-to-subject binding is not established",
             ],
             destination: outputRoot.path,
             subjects: subjects,
             filenamesLateBound: true,
+            stemScope: stemScope,
             planningReason: planningReason
         )
+    }
+
+    /// Reads `stem_scope` without letting it mean nothing.
+    ///
+    /// Absent means `.allTracks`, which is the behaviour every plan written before the parameter
+    /// existed already had. Supplying it without a `stem` artifact is refused: a parameter that
+    /// changes nothing is worse than no parameter, because the caller believes it did something.
+    private static func stemExportScope(
+        from params: [String: Value],
+        artifactKinds: [String]
+    ) throws -> StemExportScope {
+        guard let value = params["stem_scope"] else { return .allTracks }
+        guard artifactKinds.contains("stem") else {
+            throw ExportPlanError.invalid(
+                "stem_scope_requires_a_stem_artifact: stem_scope was supplied but the request has no \"stem\" artifact, so it would change nothing"
+            )
+        }
+        guard let raw = value.stringValue, let scope = StemExportScope(rawValue: raw) else {
+            throw ExportPlanError.invalid(
+                "stem_scope must be all_tracks or per_track"
+            )
+        }
+        return scope
     }
 
     /// Stem runs cannot acquire the subjects they promise from project metadata,

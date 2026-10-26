@@ -62,7 +62,16 @@ enum ProjectExportExecutor {
     /// Late-bound, panel-driven stem export. The drive reports its observed UI
     /// terminal state; on-disk enumeration and audio analysis remain here in
     /// the executor, alongside every other artifact verification.
-    typealias StemExportDrive = @Sendable (_ destination: String) async -> ProjectStemExportPanelDriver.Outcome
+    ///
+    /// The scope and subject travel with the destination because a per-track
+    /// export is only bound to its subject by the selection the driver makes
+    /// before opening the menu — a drive that took only a destination could not
+    /// make that binding, and would be back to guessing from filenames.
+    typealias StemExportDrive = @Sendable (
+        _ destination: String,
+        _ scope: StemExportScope,
+        _ subject: ProjectExportStemSubject?
+    ) async -> ProjectStemExportPanelDriver.Outcome
     typealias BounceHelperProcessRunner = @Sendable (_ executable: String, _ arguments: [String], _ timeout: TimeInterval) -> BoundedProcessRunner.Result
     typealias RunResult = ProjectExportRunResult
     typealias RunProject = ProjectExportRunProject
@@ -106,8 +115,10 @@ enum ProjectExportExecutor {
                 minimumDurationSeconds: 0.05,
                 bounceToPath: { artifactPath in await ProjectExportExecutor.runBounceHelper(artifactPath: artifactPath) },
                 dialogPresent: { AXLogicProElements.dialogPresent() },
-                driveStemExport: { destination in
-                    await ProjectStemExportPanelDriver.live(destination: destination)
+                driveStemExport: { destination, scope, subject in
+                    await ProjectStemExportPanelDriver.live(
+                        destination: destination, scope: scope, subject: subject
+                    )
                 }
             )
         }

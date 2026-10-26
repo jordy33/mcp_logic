@@ -1514,7 +1514,7 @@ struct Issue369StemExportTests {
         let outputRoot = try makeExecTempDir()
         let project = try makeLogicxProject(in: projectRoot, named: "Unobserved Stem Press")
         var options = fastOptions(identity: { project.path })
-        options.driveStemExport = { _ in
+        options.driveStemExport = { _, _, _ in
             .uncertain(
                 "readback_unavailable: stem_export_effect_or_progress_not_observed_after_press",
                 exportEffectObserved: false
@@ -1548,7 +1548,7 @@ struct Issue369StemExportTests {
         let project = try makeLogicxProject(in: projectRoot, named: "Stem Panel Refusal")
         let router = await makeExportRouter()
         var options = fastOptions(identity: { project.path })
-        options.driveStemExport = { _ in .refused("stem_destination_not_confirmed_after_browser_selection") }
+        options.driveStemExport = { _, _, _ in .refused("stem_destination_not_confirmed_after_browser_selection") }
 
         let run = await ProjectExportExecutor.run(
             params: [
@@ -1618,7 +1618,7 @@ struct Issue369StemExportTests {
         let output = outputRoot.appendingPathComponent("opaque-silent.wav")
         let router = await makeExportRouter()
         var options = fastOptions(identity: { project.path })
-        options.driveStemExport = { _ in
+        options.driveStemExport = { _, _, _ in
             _ = try? writeSilentWav(at: output)
             return .completed
         }
@@ -1689,7 +1689,7 @@ struct Issue369StemExportTests {
             stemSubjects: subjects
         )
         var options = fastOptions(identity: { project.path })
-        options.driveStemExport = { _ in .refused("stem_destination_browser_selection_failed") }
+        options.driveStemExport = { _, _, _ in .refused("stem_destination_browser_selection_failed") }
 
         let run = await ProjectExportExecutor.run(
             params: [
@@ -1724,7 +1724,7 @@ struct Issue369StemExportTests {
             try? Data("other writer".utf8).write(to: collision)
         })
         var options = fastOptions(identity: { project.path })
-        options.driveStemExport = { _ in
+        options.driveStemExport = { _, _, _ in
             panelReached.set()
             return .completed
         }
@@ -1758,7 +1758,7 @@ struct Issue369StemExportTests {
         let project = try makeLogicxProject(in: projectRoot, named: "Concurrent Observation")
         let concurrentEntry = outputRoot.appendingPathComponent("concurrent.wav")
         var options = fastOptions(identity: { project.path })
-        options.driveStemExport = { _ in
+        options.driveStemExport = { _, _, _ in
             _ = try? writeToneWav(at: concurrentEntry)
             return .completed
         }
@@ -1922,7 +1922,7 @@ struct Issue369StemExportTests {
         let second = outputRoot.appendingPathComponent("opaque-second.wav")
         let router = await makeExportRouter()
         var options = fastOptions(identity: { project.path })
-        options.driveStemExport = { _ in
+        options.driveStemExport = { _, _, _ in
             _ = try? writeToneWav(at: first)
             _ = try? writeToneWav(at: second)
             return .completed
@@ -2026,7 +2026,7 @@ struct Issue369StemExportTests {
         let panelReached = BoolFlag()
         var options = fastOptions(identity: { project.path })
         options.fileManager = fileManager
-        options.driveStemExport = { _ in
+        options.driveStemExport = { _, _, _ in
             panelReached.set()
             return .completed
         }

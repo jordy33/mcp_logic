@@ -15,6 +15,9 @@ import Testing
     #expect(VerifiedPluginCatalog.canonicalPluginID(from: "Channel EQ") == "logic.stock.effect.channel_eq")
     #expect(VerifiedPluginCatalog.canonicalPluginID(from: "Compressor") == "logic.stock.effect.compressor")
     #expect(VerifiedPluginCatalog.canonicalPluginID(from: "Noise Gate") == "logic.stock.effect.noise_gate")
+    #expect(VerifiedPluginCatalog.canonicalPluginID(from: "Limiter") == "logic.stock.effect.limiter")
+    // `Adaptive Limiter` is a different stock plug-in; the alias table must not absorb it.
+    #expect(VerifiedPluginCatalog.canonicalPluginID(from: "Adaptive Limiter") == nil)
 }
 
 @Test func testCanonicalPluginIDRejectsUnbackedIdentity() {

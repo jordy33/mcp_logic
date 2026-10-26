@@ -35,7 +35,7 @@ enum QualificationTranscriptNormalizer {
     /// from matching; the UUID shape is the second, decisive guard. The pattern
     /// is a compile-time constant, so a malformed literal is a build-caught
     /// programmer error — `try!` is the correct spelling here.
-    private nonisolated(unsafe) static let identifierRegex = try! NSRegularExpression(
+    private static let identifierRegex = try! NSRegularExpression(
         pattern: "(?<![0-9A-Za-z_])(trk|mix|ins|prj|lpmcp)_"
             + "([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})"
     )

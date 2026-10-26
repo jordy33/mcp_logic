@@ -49,6 +49,34 @@ MCP client → logic_tracks.set_instrument {
 Logic Pro MCP: region imported, instrument routed, readback exposed through resources.
 ```
 
+---
+
+## Scope: Mixing and Mastering Engineering
+
+This repository's active line of work covers **two roles and nothing else**:
+
+- **Mixing engineer** — takes the recorded tracks (vocals, instruments, drums), balances their
+  levels, cleans imperfections and applies effects such as EQ, compression and reverb so they
+  coexist in balance. What that requires here: one addressable audio file per recorded track, and
+  verified writes to track-level gain, pan, EQ, compressor and sends.
+- **Mastering engineer** — the last step; polishes and unifies the finished song's sound for
+  digital platforms, radio or film. What that requires here: verified writes to the master Stereo
+  Output chain, a Limiter, and a bounce whose render settings were actually read.
+
+The work is tracked in [`docs/tickets/mix-master-engineer/`](docs/tickets/mix-master-engineer/STATUS.md).
+
+**What that scope means, stated so it is not read as a claim about everything else.** The server's
+broader surface — composition, MIDI writing and editing, transport, arrange and region operations,
+navigation, session audit, markers — remains available and is documented below. It is **not** part of
+this line of work, is not being extended for it, and its limits are not the limits of the two roles
+above. Where a capability is described as ready for these roles, the question it answers is the only
+one that matters to them: *can an automated mixing or mastering engineer depend on this, verified,
+end to end?*
+
+**What this server does not do:** it applies and verifies changes in Logic Pro; it does not decide
+the mix. The judgement about what a track's level, EQ or compression should be lives in the
+companion **`mcp_sound_engineer`** server, which drives this one.
+
 ## At a Glance
 
 Counts below are read from the current source tree with the command shown; re-run it after pulling to reproduce.

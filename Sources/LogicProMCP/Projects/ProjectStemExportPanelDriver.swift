@@ -11,6 +11,13 @@ enum ProjectStemExportPanelDriver {
         "stem_export_export_menu_label_not_measured_for_current_locale"
     static let stemLeafLabelNotMeasuredReason =
         "stem_export_all_tracks_audio_file_label_not_measured_for_current_locale"
+    /// A per-track run must resolve the singular leaf. Seeing the all-tracks leaf
+    /// where the singular one was expected means the menu is not in the state
+    /// this run depends on, so nothing is exported.
+    static let stemScopeLeafMismatchReason =
+        "stem_scope_leaf_mismatch: the File > Export menu offered the all-tracks audio-file leaf while a per-track scope was requested"
+    static let stemPerTrackLeafLabelNotMeasuredReason =
+        "stem_export_single_track_audio_file_label_not_measured_for_current_locale"
     static let panelLabelNotMeasuredReason =
         "stem_export_panel_label_not_measured_for_current_locale"
     // Live Logic observation on 2026-09-01, 8 samples: the panel appeared
@@ -68,6 +75,26 @@ enum ProjectStemExportPanelDriver {
         /// unrelated reasons, including a user Escape, so it is not export
         /// evidence.
         case uncertain(String, exportEffectObserved: Bool)
+        /// The export completed and the panel closed, but the selection that
+        /// existed before the run could not be proven restored afterwards. The
+        /// produced file's own evidence is unaffected — it was written and can be
+        /// analyzed — so this is a warning the run records, not a downgrade.
+        case completedSelectionRestoreUnproven(String)
+    }
+
+    /// The Arrange track selection observed before a per-track run touched
+    /// anything. Restoring it is a separate, verified step: the measured
+    /// primitive selects exactly one track, so a snapshot naming a different
+    /// number of tracks is reported as unrestorable rather than approximated.
+    struct SelectionSnapshot: Sendable, Equatable {
+        let indices: [Int]
+    }
+
+    enum SubjectSelection: Sendable, Equatable {
+        case selected
+        /// Names the failed component. Every refusal here happens before the
+        /// panel is opened, so the run must expose `write_attempted:false`.
+        case refused(String)
     }
 
     protocol Surface: AnyObject, Sendable {
@@ -103,10 +130,23 @@ enum ProjectStemExportPanelDriver {
         /// Attempts Cancel. The subsequent `exportPanelPresence()` readback,
         /// not this action's return, establishes whether the panel closed.
         func closeExportPanel()
+        /// The Arrange selection as it stands now, or nil when any track's selected
+        /// flag could not be read. An unreadable flag is unknown, never "unselected".
+        func captureSelection() -> SelectionSnapshot?
+        /// Selects exactly `index` and proves it exclusive, corroborating the
+        /// Arrange index against the subject's name before AND after actuating.
+        func selectSubject(index: Int, name: String) -> SubjectSelection
+        /// Attempts to restore `snapshot`. Nil means the actuation succeeded; the
+        /// caller still proves the result with `selectionMatches`.
+        func restoreSelection(_ snapshot: SelectionSnapshot) -> String?
+        /// Re-reads the selection and reports whether it equals `snapshot`.
+        func selectionMatches(_ snapshot: SelectionSnapshot) -> Bool
     }
 
     static func drive(
         destination: String,
+        scope: StemExportScope = .allTracks,
+        subject: ProjectExportStemSubject? = nil,
         surface: Surface,
         progressPollAttempts: Int,
         sleep: @escaping @Sendable (UInt64) async -> Void,
@@ -115,10 +155,35 @@ enum ProjectStemExportPanelDriver {
             DispatchTime.now().uptimeNanoseconds
         }
     ) async -> Outcome {
+        // The selection that existed before this run touched anything, recorded
+        // first so every exit below can restore it, including a refusal.
+        var originalSelection: SelectionSnapshot?
         // AC-6: every exit attempts Cancel and then observes the panel's
         // absence. A press action is not a close confirmation.
         func finish(_ outcome: Outcome) -> Outcome {
             surface.closeExportPanel()
+            // A restore that cannot be performed or proven is reported on the
+            // outcome, never dropped: the produced file keeps its own evidence,
+            // and the caller learns the user's selection may have moved.
+            if let snapshot = originalSelection,
+               let restoreFailure = surface.restoreSelection(snapshot)
+                   ?? (surface.selectionMatches(snapshot) ? nil : "selection_restore_unproven") {
+                switch outcome {
+                case .completed:
+                    return finishPresence(.completedSelectionRestoreUnproven(restoreFailure))
+                case let .uncertain(reason, observed):
+                    return finishPresence(.uncertain("\(reason); selection_restore_unproven: \(restoreFailure)",
+                                                     exportEffectObserved: observed))
+                case let .refused(reason):
+                    return finishPresence(.refused("\(reason); selection_restore_unproven: \(restoreFailure)"))
+                case .completedSelectionRestoreUnproven:
+                    break
+                }
+            }
+            return finishPresence(outcome)
+        }
+
+        func finishPresence(_ outcome: Outcome) -> Outcome {
             switch surface.exportPanelPresence() {
             case .absent:
                 return outcome
@@ -130,6 +195,9 @@ enum ProjectStemExportPanelDriver {
                     return .uncertain("stem_export_panel_remained_open_after_close_attempt", exportEffectObserved: true)
                 case let .uncertain(_, exportEffectObserved):
                     return .uncertain("stem_export_panel_remained_open_after_close_attempt", exportEffectObserved: exportEffectObserved)
+                case let .completedSelectionRestoreUnproven(warning):
+                    return .uncertain("stem_export_panel_remained_open_after_close_attempt; selection_restore_unproven: \(warning)",
+                                      exportEffectObserved: true)
                 }
             case .unavailable:
                 switch outcome {
@@ -139,6 +207,9 @@ enum ProjectStemExportPanelDriver {
                     return .uncertain("readback_unavailable: stem_export_panel_close_not_observed", exportEffectObserved: true)
                 case let .uncertain(_, exportEffectObserved):
                     return .uncertain("readback_unavailable: stem_export_panel_close_not_observed", exportEffectObserved: exportEffectObserved)
+                case let .completedSelectionRestoreUnproven(warning):
+                    return .uncertain("readback_unavailable: stem_export_panel_close_not_observed; selection_restore_unproven: \(warning)",
+                                      exportEffectObserved: true)
                 }
             case let .partiallyMeasured(recognized, notMeasured):
                 let leftOpen = "stem_export_panel_left_open_after_close_attempt: recognized=\(recognized); not_measured=\(notMeasured)"
@@ -149,6 +220,9 @@ enum ProjectStemExportPanelDriver {
                     return .uncertain(leftOpen, exportEffectObserved: true)
                 case let .uncertain(_, exportEffectObserved):
                     return .uncertain(leftOpen, exportEffectObserved: exportEffectObserved)
+                case let .completedSelectionRestoreUnproven(warning):
+                    return .uncertain("\(leftOpen); selection_restore_unproven: \(warning)",
+                                      exportEffectObserved: true)
                 }
             case let .unmeasured(reason):
                 let leftOpen = "stem_export_panel_left_open_unmeasured: \(reason)"
@@ -159,7 +233,31 @@ enum ProjectStemExportPanelDriver {
                     return .uncertain(leftOpen, exportEffectObserved: true)
                 case let .uncertain(_, exportEffectObserved):
                     return .uncertain(leftOpen, exportEffectObserved: exportEffectObserved)
+                case let .completedSelectionRestoreUnproven(warning):
+                    return .uncertain("\(leftOpen); selection_restore_unproven: \(warning)",
+                                      exportEffectObserved: true)
                 }
+            }
+        }
+
+        // AC-3/AC-4: a per-track run fixes provenance before anything is opened.
+        // The selection is read, then made exactly this subject and proven, so an
+        // export driven afterwards can only have written that subject's file.
+        if scope == .perTrack {
+            guard let subject else {
+                return .refused("stem_per_track_subject_missing")
+            }
+            guard let snapshot = surface.captureSelection() else {
+                return .refused("subject_selection_unreadable")
+            }
+            originalSelection = snapshot
+            switch surface.selectSubject(index: subject.index, name: subject.name) {
+            case .selected:
+                break
+            case let .refused(reason):
+                // Nothing was opened, so nothing needs closing; the restore still
+                // runs because the failed selection attempt may have moved it.
+                return finish(.refused(reason))
             }
         }
 
@@ -284,13 +382,17 @@ enum ProjectStemExportPanelDriver {
 
     static func live(
         destination: String,
+        scope: StemExportScope = .allTracks,
+        subject: ProjectExportStemSubject? = nil,
         progressPollAttempts: Int = 80,
         pollIntervalNanos: UInt64 = 250_000_000,
         sleep: @escaping @Sendable (UInt64) async -> Void = { try? await Task.sleep(nanoseconds: $0) }
     ) async -> Outcome {
         await drive(
             destination: destination,
-            surface: AXSurface(),
+            scope: scope,
+            subject: subject,
+            surface: AXSurface(scope: scope),
             progressPollAttempts: progressPollAttempts,
             sleep: sleep,
             pollIntervalNanos: pollIntervalNanos
@@ -313,7 +415,23 @@ enum ProjectStemExportPanelDriver {
     }
 }
 
+/// Fail-closed defaults for the four selection members, so a surface that only
+/// supports the all-tracks route keeps compiling and can never report a selection
+/// it did not observe. A per-track run against such a surface refuses before
+/// opening any menu.
+extension ProjectStemExportPanelDriver.Surface {
+    func captureSelection() -> ProjectStemExportPanelDriver.SelectionSnapshot? { nil }
+    func selectSubject(index: Int, name: String) -> ProjectStemExportPanelDriver.SubjectSelection {
+        .refused("stem_per_track_selection_unsupported")
+    }
+    func restoreSelection(_ snapshot: ProjectStemExportPanelDriver.SelectionSnapshot) -> String? {
+        "stem_per_track_selection_restore_unsupported"
+    }
+    func selectionMatches(_ snapshot: ProjectStemExportPanelDriver.SelectionSnapshot) -> Bool { false }
+}
+
 final class AXSurface: ProjectStemExportPanelDriver.Surface, @unchecked Sendable {
+    private let scope: StemExportScope
     private let runtime: AXLogicProElements.Runtime
     private let mouseRuntime: AXMouseHelper.Runtime
     private let directoryListing: @Sendable (String) -> DirectoryListing
@@ -338,6 +456,7 @@ final class AXSurface: ProjectStemExportPanelDriver.Surface, @unchecked Sendable
     private static let destinationNavigationPollIntervalNanos: UInt64 = 50_000_000
 
     init(
+        scope: StemExportScope = .allTracks,
         runtime: AXLogicProElements.Runtime = .production,
         mouseRuntime: AXMouseHelper.Runtime = .production,
         directoryListing: @escaping @Sendable (String) -> DirectoryListing = { path in
@@ -356,6 +475,7 @@ final class AXSurface: ProjectStemExportPanelDriver.Surface, @unchecked Sendable
             Thread.sleep(forTimeInterval: Double(duration) / 1_000_000_000)
         }
     ) {
+        self.scope = scope
         self.runtime = runtime
         self.mouseRuntime = mouseRuntime
         self.directoryListing = directoryListing
@@ -401,11 +521,20 @@ final class AXSurface: ProjectStemExportPanelDriver.Surface, @unchecked Sendable
         guard let app = AXLogicProElements.appRoot(runtime: runtime) else {
             return .unavailable("stem_export_menu_leaf_unavailable_after_open")
         }
-        let leaves = menuItems(in: app, matching: ProjectStemExportPanelDriver.stemLeafTitleMatches)
+        let leaves = menuItems(in: app, matching: { ProjectStemExportPanelDriver.stemLeafTitleMatches($0, scope: scope) })
         guard leaves.count == 1, let leaf = leaves.first else {
-            return .unavailable(leaves.isEmpty
-                ? ProjectStemExportPanelDriver.stemLeafLabelNotMeasuredReason
-                : "stem_export_menu_leaf_unavailable_after_open")
+            guard leaves.isEmpty else {
+                return .unavailable("stem_export_menu_leaf_unavailable_after_open")
+            }
+            // A per-track run that sees the all-tracks leaf where the singular one
+            // belongs refuses instead of picking it.
+            if scope == .perTrack,
+               menuItems(in: app, matching: { AXLocalePolicy.allTracksAsAudioFilesMenuItem.matches($0) }).count == 1 {
+                return .unavailable(ProjectStemExportPanelDriver.stemScopeLeafMismatchReason)
+            }
+            return .unavailable(scope == .perTrack
+                ? ProjectStemExportPanelDriver.stemPerTrackLeafLabelNotMeasuredReason
+                : ProjectStemExportPanelDriver.stemLeafLabelNotMeasuredReason)
         }
         // This read intentionally happens here, after `openFileMenu` and
         // `openExportMenu`; closed-menu enablement is not a valid observation.
@@ -419,7 +548,7 @@ final class AXSurface: ProjectStemExportPanelDriver.Surface, @unchecked Sendable
 
     func pickStemLeaf() {
         guard let app = AXLogicProElements.appRoot(runtime: runtime),
-              let leaf = menuItem(in: app, matching: ProjectStemExportPanelDriver.stemLeafTitleMatches) else {
+              let leaf = menuItem(in: app, matching: { ProjectStemExportPanelDriver.stemLeafTitleMatches($0, scope: scope) }) else {
             return
         }
         // `AXPress` is a silent no-op for this popup leaf; AXPick is the
@@ -529,6 +658,61 @@ final class AXSurface: ProjectStemExportPanelDriver.Surface, @unchecked Sendable
             }
         }
         return .selected
+    }
+
+    /// Every track's selected flag must read, because an unreadable flag is
+    /// unknown and an unknown selection cannot be restored or proven exclusive.
+    func captureSelection() -> ProjectStemExportPanelDriver.SelectionSnapshot? {
+        let headers = AXLogicProElements.allTrackHeaders(runtime: runtime)
+        guard !headers.isEmpty else { return nil }
+        let states = headers.map { AXValueExtractors.extractSelectedState($0, runtime: runtime.ax) }
+        guard states.allSatisfy({ $0 != nil }) else { return nil }
+        return ProjectStemExportPanelDriver.SelectionSnapshot(
+            indices: states.enumerated().compactMap { $1 == true ? $0 : nil }
+        )
+    }
+
+    func selectSubject(index: Int, name: String) -> ProjectStemExportPanelDriver.SubjectSelection {
+        // The index is corroborated against the subject's name on both sides of
+        // the actuation: an Arrange index alone is not evidence that the track
+        // this run planned is still the track it selected.
+        guard let before = AXLogicProElements.trackName(at: index, runtime: runtime) else {
+            return .refused("subject_selection_name_unreadable")
+        }
+        guard before == name else {
+            return .refused("subject_selection_name_mismatch: planned=\(name) observed=\(before)")
+        }
+        guard AccessibilityChannel.confirmExclusiveSelection(index: index, runtime: runtime) else {
+            return .refused("subject_selection_not_exclusive")
+        }
+        guard let after = AXLogicProElements.trackName(at: index, runtime: runtime) else {
+            return .refused("subject_selection_name_unreadable")
+        }
+        guard after == name else {
+            return .refused("subject_selection_name_mismatch: planned=\(name) observed=\(after)")
+        }
+        return .selected
+    }
+
+    /// Only a single-index snapshot is restorable: the measured primitive selects
+    /// one track. Any other snapshot is reported as unrestorable rather than
+    /// approximated, and the caller still proves the result.
+    func restoreSelection(_ snapshot: ProjectStemExportPanelDriver.SelectionSnapshot) -> String? {
+        switch snapshot.indices.count {
+        case 0:
+            return "selection_restore_unavailable_for_empty_selection"
+        case 1:
+            return AXLogicProElements.selectTrackViaAX(at: snapshot.indices[0], runtime: runtime)
+                ? nil
+                : "selection_restore_actuation_refused"
+        default:
+            return "selection_restore_unavailable_for_multi_selection"
+        }
+    }
+
+    func selectionMatches(_ snapshot: ProjectStemExportPanelDriver.SelectionSnapshot) -> Bool {
+        guard let current = captureSelection() else { return false }
+        return current.indices == snapshot.indices
     }
 
     func oneFilePerTrackIsActive() -> Bool {
@@ -1322,7 +1506,15 @@ extension ProjectStemExportPanelDriver {
         AXLocalePolicy.exportMenuItem.matches(title)
     }
 
-    static func stemLeafTitleMatches(_ title: String) -> Bool {
-        AXLocalePolicy.allTracksAsAudioFilesMenuItem.matches(title)
+    static func stemLeafTitleMatches(_ title: String, scope: StemExportScope = .allTracks) -> Bool {
+        switch scope {
+        case .allTracks:
+            return AXLocalePolicy.allTracksAsAudioFilesMenuItem.matches(title)
+        case .perTrack:
+            // Only the singular leaf. The plural selection form exports a
+            // multi-track set and is a different command; treating it as
+            // equivalent is how a run silently exports the wrong set.
+            return AXLocalePolicy.singleTrackAsAudioFileMenuItem.matches(title)
+        }
     }
 }

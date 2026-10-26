@@ -14,6 +14,13 @@ extension ProjectExportExecutor {
             return .failure(fallbackDetail, bounceFired: fallbackBounceFired)
         }
 
+        // The dialog settings, when the helper read them. An empty object is "the helper looked
+        // and found nothing usable", which is not the same as an absent key (an older helper):
+        // both become nil, and the run reports the settings as unread rather than as empty.
+        let decodedSettings = (obj["bounce_settings"] as? [String: Any])?
+            .compactMapValues { $0 as? String }
+        let settings: [String: String]? = (decodedSettings?.isEmpty == false) ? decodedSettings : nil
+
         // An explicit `bounce_fired` from the helper is authoritative; only fall
         // back to heuristics when the field is ABSENT. Parentheses are required:
         // `??` binds tighter than `||`, so the un-parenthesized form let an
@@ -27,21 +34,25 @@ extension ProjectExportExecutor {
            let ok = obj["success"] as? Bool, ok,
            let artifact = obj["artifact"] as? String,
            !artifact.isEmpty {
-            return .success(artifact, bounceFired: true)
+            return .success(artifact, bounceFired: true, settings: settings)
         }
         if let helperError = obj["error"] as? String, !helperError.isEmpty {
-            return .failure(helperError, bounceFired: bounceFired)
+            return .failure(helperError, bounceFired: bounceFired, settings: settings)
         }
         if let helperReason = obj["reason"] as? String, !helperReason.isEmpty {
-            return .failure(helperReason, bounceFired: bounceFired)
+            return .failure(helperReason, bounceFired: bounceFired, settings: settings)
         }
         if let payload = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]),
            let payloadString = String(data: payload, encoding: .utf8),
            !payloadString.isEmpty {
             if output.exitCode == 0 {
-                return .failure(payloadString, bounceFired: bounceFired)
+                return .failure(payloadString, bounceFired: bounceFired, settings: settings)
             }
-            return .failure("bounce_helper_exit_code_\(output.exitCode): \(payloadString)", bounceFired: bounceFired)
+            return .failure(
+                "bounce_helper_exit_code_\(output.exitCode): \(payloadString)",
+                bounceFired: bounceFired,
+                settings: settings
+            )
         }
         return .failure(fallbackDetail, bounceFired: bounceFired)
     }

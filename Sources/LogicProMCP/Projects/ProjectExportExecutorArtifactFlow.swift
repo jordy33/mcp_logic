@@ -122,9 +122,17 @@ extension ProjectExportExecutor {
             )
         }
 
+        // Settings read off the Bounce dialog by the helper, carried on EVERY return path below.
+        // A failed render still knows which settings were attempted, and discarding them is the
+        // habit this record exists to break.
+        var bounceSettings: [String: String]? = nil
+        var bounceSettingsReadStatus: String? = nil
+
         let producedPath: String
         if let bounce = options.bounceToPath {
             let bounceResult = await bounce(artifact.path)
+            bounceSettings = bounceResult.settings
+            bounceSettingsReadStatus = bounceResult.settings == nil ? "unreadable" : "ok"
             guard let produced = bounceResult.artifactPath else {
                 return RunArtifact(
                     kind: artifact.kind,
@@ -135,7 +143,9 @@ extension ProjectExportExecutor {
                     writeAttempted: bounceResult.bounceFired,
                     error: "bounce_helper_failed: \(bounceResult.error ?? "no verified artifact produced for \(artifact.path)")",
                     reason: nil,
-                    evidence: nil
+                    evidence: nil,
+                    bounceSettings: bounceSettings,
+                    bounceSettingsReadStatus: bounceSettingsReadStatus
                 )
             }
             guard ProjectExportArtifactPathPolicy.helperProducedPathMatchesPlannedStem(
@@ -145,7 +155,9 @@ extension ProjectExportExecutor {
                 return failedArtifact(
                     artifact,
                     error: "bounce_helper_unexpected_artifact_path: expected stem \(ProjectExportArtifactPathPolicy.standardizedStemPath(artifact.path)) but helper returned \(produced)",
-                    bounceFired: true
+                    bounceFired: true,
+                    bounceSettings: bounceSettings,
+                    bounceSettingsReadStatus: bounceSettingsReadStatus
                 )
             }
             producedPath = produced
@@ -186,7 +198,9 @@ extension ProjectExportExecutor {
             return failedArtifact(
                 artifact,
                 error: "artifact_path_unsafe: \(analysis.verification.detail ?? analysis.verification.reasons.joined(separator: ","))",
-                bounceFired: true
+                bounceFired: true,
+                bounceSettings: bounceSettings,
+                bounceSettingsReadStatus: bounceSettingsReadStatus
             )
         }
         let evidence = ArtifactEvidence(from: analysis, source: "audio_analyzer")
@@ -200,7 +214,9 @@ extension ProjectExportExecutor {
                 writeAttempted: true,
                 error: nil,
                 reason: nil,
-                evidence: evidence
+                evidence: evidence,
+                bounceSettings: bounceSettings,
+                bounceSettingsReadStatus: bounceSettingsReadStatus
             )
         }
         return RunArtifact(
@@ -212,7 +228,9 @@ extension ProjectExportExecutor {
             writeAttempted: true,
             error: nil,
             reason: "artifact_unverified: \(analysis.verification.reasons.joined(separator: ","))",
-            evidence: evidence
+            evidence: evidence,
+            bounceSettings: bounceSettings,
+            bounceSettingsReadStatus: bounceSettingsReadStatus
         )
     }
 
@@ -258,6 +276,19 @@ extension ProjectExportExecutor {
                 observations: nil
             )
         }
+        // A per-track run exports one subject at a time. It is the only route on
+        // which a produced file can be attributed to a track, because the driver
+        // proves an exclusive selection of that track before the menu opens.
+        if artifact.stemScope == .perTrack {
+            return await produceStemPerTrack(
+                artifact: artifact,
+                plan: plan,
+                subjects: subjects,
+                drive: drive,
+                options: options
+            )
+        }
+
         // The plan's collision read can become stale before the panel opens.
         // This later, immediately-pre-export snapshot is authoritative: if it
         // is no longer empty under fail_if_exists, do not drive the panel.
@@ -294,7 +325,7 @@ extension ProjectExportExecutor {
             )
         }
 
-        switch await drive(destination) {
+        switch await drive(destination, .allTracks, nil) {
         case .refused(let error):
             return stemSubjectArtifacts(
                 artifact: artifact,
@@ -324,7 +355,9 @@ extension ProjectExportExecutor {
                 reason: reason,
                 observations: nil
             )
-        case .completed:
+        case .completed, .completedSelectionRestoreUnproven:
+            // The all-tracks route keeps no selection custody, so the second case
+            // cannot arise here; the artifact still follows its normal path.
             break
         }
 
@@ -376,6 +409,258 @@ extension ProjectExportExecutor {
             error: nil,
             reason: reason,
             observations: observations
+        )
+    }
+
+    /// Export one subject at a time, binding the file to the subject by
+    /// construction: the driver proves an exclusive selection of that subject
+    /// before the panel opens, so exactly one new file in the destination during
+    /// that subject's own window can only be that subject's output.
+    ///
+    /// `fail_if_exists` is deliberately NOT weakened here. A per-subject delta
+    /// cannot distinguish "a new file appeared" from "an existing file was
+    /// overwritten", because Logic's filename is unknown before the export runs;
+    /// allowing a non-empty destination would turn an overwrite into a silent
+    /// zero-file observation. The pre-run refusal therefore stays.
+    private static func produceStemPerTrack(
+        artifact: ProjectExportPlanArtifact,
+        plan: ProjectExportPlan,
+        subjects: [ProjectExportStemSubject],
+        drive: StemExportDrive,
+        options: Options
+    ) async -> [RunArtifact] {
+        let destination = artifact.destination ?? artifact.path
+        if plan.collisionPolicy == "fail_if_exists" {
+            switch ProjectExportArtifactPathPolicy.supportedAudioEntries(
+                in: destination,
+                fileManager: options.fileManager
+            ) {
+            case .files(let files) where !files.isEmpty:
+                return stemSubjectArtifacts(
+                    artifact: artifact,
+                    destination: destination,
+                    subjects: subjects,
+                    state: "C",
+                    bounceFired: false,
+                    writeAttempted: false,
+                    error: "overwrite_blocked: collision_policy=fail_if_exists and the authoritative immediately-pre-export stem snapshot contains \(files.count) suffix-qualified top-level audio entry/entries",
+                    reason: nil,
+                    observations: nil
+                )
+            case .unreadable(let reason):
+                return stemSubjectArtifacts(
+                    artifact: artifact,
+                    destination: destination,
+                    subjects: subjects,
+                    state: "C",
+                    bounceFired: false,
+                    writeAttempted: false,
+                    error: "stem_output_snapshot_unavailable_before_export: \(reason)",
+                    reason: nil,
+                    observations: nil
+                )
+            case .files:
+                break
+            }
+        }
+
+        /// Every artifact the run produced carries a run-level restore warning, so
+        /// a selection the user left where it was never becomes a silent change.
+        var runWarnings: [String] = []
+        var results: [RunArtifact] = []
+        for subject in subjects {
+            let result = await produceStemForSubject(
+                subject: subject,
+                artifact: artifact,
+                plan: plan,
+                destination: destination,
+                drive: drive,
+                options: options,
+                runWarnings: &runWarnings
+            )
+            results.append(result)
+        }
+        guard !runWarnings.isEmpty else { return results }
+        return results.map { result in
+            RunArtifact(
+                kind: result.kind,
+                path: result.path,
+                state: result.state,
+                verified: result.verified,
+                bounceFired: result.bounceFired,
+                writeAttempted: result.writeAttempted,
+                error: result.error,
+                reason: result.reason,
+                evidence: result.evidence,
+                subject: result.subject,
+                observedStemOutputs: result.observedStemOutputs,
+                bounceSettings: result.bounceSettings,
+                bounceSettingsReadStatus: result.bounceSettingsReadStatus,
+                warnings: (result.warnings ?? []) + runWarnings
+            )
+        }
+    }
+
+    private static func produceStemForSubject(
+        subject: ProjectExportStemSubject,
+        artifact: ProjectExportPlanArtifact,
+        plan: ProjectExportPlan,
+        destination: String,
+        drive: StemExportDrive,
+        options: Options,
+        runWarnings: inout [String]
+    ) async -> RunArtifact {
+        func artifactResult(
+            state: String,
+            path: String,
+            verified: Bool,
+            bounceFired: Bool,
+            writeAttempted: Bool,
+            error: String?,
+            reason: String?,
+            evidence: ProjectExportArtifactEvidence? = nil,
+            observations: [ProjectExportObservedStemOutput]? = nil
+        ) -> RunArtifact {
+            RunArtifact(
+                kind: artifact.kind,
+                path: path,
+                state: state,
+                verified: verified,
+                bounceFired: bounceFired,
+                writeAttempted: writeAttempted,
+                error: error,
+                reason: reason,
+                evidence: evidence,
+                subject: subject,
+                observedStemOutputs: observations
+            )
+        }
+
+        // The fence around THIS subject's export window. A later snapshot that
+        // gains more than one file means the attribution this route depends on
+        // did not hold, and that is reported rather than picked apart.
+        let before: [String]
+        switch ProjectExportArtifactPathPolicy.supportedAudioEntries(
+            in: destination,
+            fileManager: options.fileManager
+        ) {
+        case .files(let files):
+            before = files
+        case .unreadable(let reason):
+            return artifactResult(
+                state: "C",
+                path: destination,
+                verified: false,
+                bounceFired: false,
+                writeAttempted: false,
+                error: "stem_output_snapshot_unavailable_before_export: \(reason)",
+                reason: nil
+            )
+        }
+
+        var exportCompleted = false
+        switch await drive(destination, .perTrack, subject) {
+        case .refused(let error):
+            return artifactResult(
+                state: "C",
+                path: destination,
+                verified: false,
+                bounceFired: false,
+                writeAttempted: false,
+                error: error,
+                reason: nil
+            )
+        case let .uncertain(reason, exportEffectObserved):
+            return artifactResult(
+                state: "B",
+                path: destination,
+                verified: false,
+                bounceFired: exportEffectObserved,
+                writeAttempted: true,
+                error: nil,
+                reason: reason
+            )
+        case let .completedSelectionRestoreUnproven(warning):
+            runWarnings.append("selection_restore_unproven: \(warning)")
+            exportCompleted = true
+        case .completed:
+            exportCompleted = true
+        }
+        guard exportCompleted else {
+            return artifactResult(
+                state: "B",
+                path: destination,
+                verified: false,
+                bounceFired: false,
+                writeAttempted: true,
+                error: nil,
+                reason: "stem_export_completion_not_established"
+            )
+        }
+
+        let after: [String]
+        switch ProjectExportArtifactPathPolicy.supportedAudioEntries(
+            in: destination,
+            fileManager: options.fileManager
+        ) {
+        case .files(let files):
+            after = files
+        case .unreadable(let reason):
+            return artifactResult(
+                state: "B",
+                path: destination,
+                verified: false,
+                bounceFired: true,
+                writeAttempted: true,
+                error: nil,
+                reason: "stem_output_snapshot_unavailable_after_export: \(reason)"
+            )
+        }
+
+        let beforeSet = Set(before)
+        let appeared = after.filter { !beforeSet.contains($0) }
+        guard appeared.count == 1, let produced = appeared.first else {
+            return artifactResult(
+                state: "B",
+                path: destination,
+                verified: false,
+                bounceFired: true,
+                writeAttempted: true,
+                error: nil,
+                reason: "per_track_export_observed_n_files: observed=\(appeared.count) expected=1 for subject index=\(subject.index) name=\(subject.name); the file-to-subject binding this route rests on did not hold"
+            )
+        }
+
+        // `supportedAudioEntries` returns absolute paths, so the appeared entry is
+        // already the file this subject produced.
+        let producedPath = produced
+        let observation = stemOutputObservation(path: producedPath, plan: plan, options: options)
+        guard observation.verified else {
+            return artifactResult(
+                state: "B",
+                path: producedPath,
+                verified: false,
+                bounceFired: true,
+                writeAttempted: true,
+                error: nil,
+                reason: observation.reason,
+                evidence: observation.evidence,
+                observations: [observation]
+            )
+        }
+        // State A: the selection was proven exclusive for this subject before the
+        // menu opened, exactly one file appeared in that subject's own window, and
+        // the analyzer verified it. That chain is what the batch route lacks.
+        return artifactResult(
+            state: "A",
+            path: producedPath,
+            verified: true,
+            bounceFired: true,
+            writeAttempted: true,
+            error: nil,
+            reason: nil,
+            evidence: observation.evidence,
+            observations: [observation]
         )
     }
 
@@ -590,7 +875,9 @@ extension ProjectExportExecutor {
     static func failedArtifact(
         _ artifact: ProjectExportPlanArtifact,
         error: String,
-        bounceFired: Bool = false
+        bounceFired: Bool = false,
+        bounceSettings: [String: String]? = nil,
+        bounceSettingsReadStatus: String? = nil
     ) -> RunArtifact {
         RunArtifact(
             kind: artifact.kind,
@@ -601,7 +888,9 @@ extension ProjectExportExecutor {
             writeAttempted: bounceFired,
             error: error,
             reason: nil,
-            evidence: nil
+            evidence: nil,
+            bounceSettings: bounceSettings,
+            bounceSettingsReadStatus: bounceSettingsReadStatus
         )
     }
 }

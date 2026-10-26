@@ -235,7 +235,7 @@ struct PluginInsertLeafConfigurationTests {
         // built from, so this asserts the SHAPE (a path ends in a configuration) rather than
         // re-stating a vocabulary that has somewhere else to live.
         let configurations = Set(AXLocalePolicy.pluginFormatStereo.labels)
-        for name in ["Gain", "Compressor", "Channel EQ"] {
+        for name in ["Gain", "Compressor", "Channel EQ", "Limiter"] {
             let spec = try #require(AccessibilityChannel.pluginInsertSpec(named: name))
             #expect(!spec.menuPaths.isEmpty, "\(name)")
             for path in spec.menuPaths {

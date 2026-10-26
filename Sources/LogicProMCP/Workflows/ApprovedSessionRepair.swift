@@ -1819,11 +1819,11 @@ final class ApprovedSessionRepair: @unchecked Sendable {
         }
         stage = "initial_custody"
         guard permitted(), pair.track.matches(task.pair.track),
-              outputRenewal.map { renewal in
+              outputRenewal.map({ renewal in
                   renewal.pair.strip.matches(pair.strip) && renewal.pair.track.matches(task.pair.track)
                       && (ownedNameEditor != nil || renewal.permits(runtime: runtime, ownedPopup: popup,
                         nativeOutputPopup: assignment == .noOutput))
-              } ?? true,
+              }) ?? true,
               proof.headers.count == task.capture.tracks.count,
               zip(proof.headers, task.capture.tracks).allSatisfy({ header, row in
                   row.physicalBinding.map { CFEqual($0.header, header) } == true

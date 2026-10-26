@@ -93,6 +93,6 @@ final class MIDITrackNativeHold {
         let raw: Result<AnyObject?, AXHelpers.AXStatusError> = AXHelpers.getAttributeResult(
             app, kAXMainWindowAttribute as String, runtime: ax)
         guard case .success(.some(let value)) = raw, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
-        return unsafeBitCast(value, to: AXUIElement.self)
+        return unsafeDowncast(value, to: AXUIElement.self)
     }
 }

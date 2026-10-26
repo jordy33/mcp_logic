@@ -79,12 +79,23 @@ KEY_CODES: Final[dict[str, int]] = {
 }
 
 
+class ControlRow(TypedDict, total=False):
+    role: str
+    name: str
+    value: str
+    depth: int
+
+
 class SavePanelSnapshotOk(TypedDict):
     status: Literal["ok"]
     button_names: list[str]
     text_field_names: list[str]
     text_field_count: int
     static_texts: list[str]
+    #: Document-ordered AXStaticText / AXPopUpButton / AXCheckBox rows, when the walker reported
+    #: them. Absent on a snapshot recorded before the control rows existed, which is why every
+    #: reader treats a missing list as "not reported" rather than "the dialog has no controls".
+    controls: list[ControlRow]
 
 
 class SavePanelSnapshotMissingFrontWindow(TypedDict):
@@ -367,6 +378,33 @@ def _string_items(values) -> list[str]:
     return []
 
 
+def _control_items(values) -> list[ControlRow]:
+    """Coerce the walker's control rows, dropping anything that is not a row.
+
+    A row keeps its raw `name` and `value` — including empty strings — because "the control is
+    here and its value read empty" is a reading, and dropping it would turn that into "no control".
+    """
+    rows: list[ControlRow] = []
+    if not isinstance(values, list):
+        return rows
+    for value in values:
+        if not isinstance(value, dict):
+            continue
+        role = value.get("role")
+        if not isinstance(role, str) or not role:
+            continue
+        name = value.get("name")
+        raw_value = value.get("value")
+        depth = value.get("depth")
+        rows.append({
+            "role": role,
+            "name": name.strip() if isinstance(name, str) else "",
+            "value": raw_value.strip() if isinstance(raw_value, str) else "",
+            "depth": depth if isinstance(depth, int) else 0,
+        })
+    return rows
+
+
 def _unreachable_status(status: str) -> NoReturn: raise AssertionError(f"unexpected snapshot status: {status}")
 
 
@@ -383,6 +421,7 @@ def _coerce_save_panel_snapshot(raw_snapshot) -> SavePanelSnapshot:
             "text_field_names": _string_items(raw_snapshot.get("text_field_names")),
             "text_field_count": text_field_count if isinstance(text_field_count, int) else 0,
             "static_texts": _string_items(raw_snapshot.get("static_texts")),
+            "controls": _control_items(raw_snapshot.get("controls")),
         }
     if status == "missing_front_window":
         return {"status": "missing_front_window"}
@@ -453,6 +492,105 @@ def bounce_settings_present(run_jxa_fn: RunJxa = run_jxa) -> bool:
     if status == "error" or status == "missing_front_window":
         return False
     return _unreachable_status(status)
+
+
+#: Substrings that identify the dialog's Normalize row across the locales Logic ships. Taken from
+#: the same generated table the presence check uses; this list only narrows it to that one row.
+NORMALIZE_LABEL_MARKERS: Final[tuple[str, ...]] = (
+    "normalize", "normalise", "normalisier", "normaliz", "normalizza", "normali",
+    "ノーマライズ", "標準化", "正常化", "노멀라이즈",
+)
+
+#: A popup or checkbox value that means "off". Deliberately small: anything not clearly off is
+#: reported as `unknown`, and a caller that cannot classify a reading must not treat it as consent.
+OFF_VALUES: Final[frozenset[str]] = frozenset({"off", "0", "false", "unchecked", "no", "disabled"})
+ON_VALUES: Final[frozenset[str]] = frozenset({"on", "1", "true", "checked", "yes", "enabled"})
+OVERLOAD_MARKERS: Final[tuple[str, ...]] = ("overload",)
+
+
+def bounce_settings_readback(run_jxa_fn: RunJxa = run_jxa) -> dict[str, str]:
+    """Row label -> observed value for every popup and checkbox in the Bounce dialog.
+
+    The label is the nearest PRECEDING AXStaticText at the same or a shallower depth in document
+    order — the row/label split measured for the Compressor's Controls view, where the name is the
+    AXRow's static text and the control itself carries only a value. A control with no such label is
+    keyed by its own name; a control with neither is dropped, so a caller sees a missing key rather
+    than an invented one.
+
+    Returns `{}` when the snapshot failed. That is "not read", which is a different answer from
+    "read and empty", and the helper reports the difference.
+    """
+    snapshot = save_panel_snapshot(run_jxa_fn=run_jxa_fn)
+    if snapshot["status"] != "ok":
+        return {}
+    settings: dict[str, str] = {}
+    label: Optional[str] = None
+    label_depth: Optional[int] = None
+    for row in snapshot.get("controls", []):
+        role = row.get("role", "")
+        name = row.get("name", "")
+        value = row.get("value", "")
+        depth = row.get("depth", 0)
+        if role == "AXStaticText":
+            text = name or value
+            if text:
+                label, label_depth = text, depth
+            continue
+        if role not in ("AXPopUpButton", "AXCheckBox"):
+            continue
+        usable_label = label if label and label_depth is not None and label_depth <= depth else None
+        key = usable_label or name
+        if not key:
+            continue
+        settings[key] = value
+    return settings
+
+
+def normalize_state(settings: dict[str, str]) -> str:
+    """`on` / `off` / `overload_protection_only` / `unknown` for the dialog's Normalize row.
+
+    `unknown` is returned when no row is identified as Normalize or its value cannot be classified.
+    It is NOT collapsed into `on`: this function reports a reading, and the caller decides what an
+    unclassified reading means. The helper refuses on `on` and proceeds on `off` or
+    `overload_protection_only`, reporting `unknown` so the reading stays visible.
+    """
+    for row_label, value in settings.items():
+        folded = row_label.lower()
+        if not any(marker in folded for marker in NORMALIZE_LABEL_MARKERS):
+            continue
+        raw = value.strip().lower()
+        if any(marker in raw for marker in OVERLOAD_MARKERS):
+            return "overload_protection_only"
+        if raw in OFF_VALUES:
+            return "off"
+        if raw in ON_VALUES:
+            return "on"
+        return "unknown"
+    return "unknown"
+
+
+def cancel_bounce_settings(
+    labels: tuple[str, ...] = SAVE_PANEL_CANCEL_BUTTONS,
+    run_osa: RunOsa = osa,
+) -> bool:
+    """Dismiss the Bounce settings dialog without rendering anything.
+
+    A refusal that leaves Logic holding a modal sheet is not a refusal, it is a hang.
+    """
+    for container in ("sheet 1 of front window", "front window"):
+        for label in labels:
+            result = _process_body(
+                f"""try
+    click button "{label}" of {container}
+    return "ok"
+on error
+    return ""
+end try""",
+                run_osa=run_osa,
+            )
+            if result == "ok":
+                return True
+    return False
 
 
 def wait_for_bounce_dialog(run_osa: RunOsa = osa, sleep_fn: Callable[[float], None] = time.sleep) -> bool:

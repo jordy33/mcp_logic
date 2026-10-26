@@ -1671,7 +1671,7 @@ extension AccessibilityChannel {
         ownedPopup: AXUIElement?, mixer: AXUIElement, runtime: AXHelpers.Runtime
     ) -> Bool {
         if case .success(.some(let value)) = reading, CFGetTypeID(value) == AXUIElementGetTypeID() {
-            return CFEqual(unsafeBitCast(value, to: AXUIElement.self), window)
+            return CFEqual(unsafeDowncast(value, to: AXUIElement.self), window)
         }
         guard case .failure(let error) = reading, error.raw == AXError.noValue.rawValue,
               let root = ownedPopup,

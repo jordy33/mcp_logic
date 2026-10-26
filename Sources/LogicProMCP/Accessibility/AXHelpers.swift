@@ -328,7 +328,7 @@ enum AXHelpers {
                     return getAttributeResult(element, attribute, runtime: runtime) as Result<AnyObject?, AXStatusError>
                 }
                 if CFGetTypeID(value) == AXValueGetTypeID() {
-                    let wrapped = unsafeBitCast(value, to: AXValue.self)
+                    let wrapped = unsafeDowncast(value, to: AXValue.self)
                     if AXValueGetType(wrapped) == .axError {
                         var error = AXError.success
                         guard AXValueGetValue(wrapped, .axError, &error), error != .success else {

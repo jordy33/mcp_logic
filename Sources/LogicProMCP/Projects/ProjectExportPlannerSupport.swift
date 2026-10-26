@@ -109,6 +109,7 @@ extension ProjectExportPlanner {
                     destination: art.destination,
                     subjects: art.subjects,
                     filenamesLateBound: art.filenamesLateBound,
+                    stemScope: art.stemScope,
                     planningReason: art.planningReason
                 )
             }

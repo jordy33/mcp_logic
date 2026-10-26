@@ -682,6 +682,26 @@ enum AXLocalePolicy {
         derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FLogic.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/All%20Tracks%20as%20Audio%20Files%E2%80%A6#value"
     )
 
+    /// #369 T1: File > Export > `1 Track as Audio File…` — the all-tracks leaf rewritten by Logic
+    /// when exactly one Arrange track is selected. A per-track stem run selects one track and then
+    /// resolves THIS leaf, which is what binds the resulting file to that track by construction
+    /// rather than by guessing from a filename.
+    ///
+    /// Measured 2026-08-19 on Logic Pro 12.3 in en-US only
+    /// (`docs/tickets/issue-369-per-track-stem-export/STATUS.md`). The singular form is the
+    /// invariant, not the word: the plural `Selected Tracks as Audio Files…` is a different command
+    /// and is deliberately not matched, because treating it as equivalent exports the wrong set.
+    /// No other locale has been measured, so this set carries no variants and no `derivedFrom` —
+    /// Apple's string keys do not contain this selection-rewritten title (the nearest key names the
+    /// key command `Export Track as Audio File`, not this menu leaf). Every other locale refuses as
+    /// an unmeasured per-track leaf instead of falling back to keyword matching.
+    static let singleTrackAsAudioFileMenuItem = LabelSet(
+        canonical: "1 Track as Audio File…",
+        variants: [],
+        rationale: "Selection-rewritten File > Export leaf, measured in en-US only on 2026-08-19: with exactly one Arrange track selected the all-tracks entry reads `1 Track as Audio File…`. Derived from no canon row, because the title is produced by Logic from the live selection and is not a stored menu string; the neighbouring key command `Export Track as Audio File` is a different name for a different route and is not evidence for this leaf. Other locales must refuse rather than translate: an unmeasured singular/plural distinction is exactly where an export would silently address the wrong set.",
+        derivedFrom: nil
+    )
+
     static let allMIDITracksAsMIDIFileMenuItem = LabelSet(
         canonical: "All MIDI Tracks as MIDI File…",
         variants: ["모든 MIDI 트랙을 MIDI 파일로…", "すべてのMIDIトラックをMIDIファイルとして…", "Alle MIDI-Spuren als MIDI-Datei\u{00A0}…", "Todas las pistas MIDI como archivo MIDI…", "Toutes les pistes MIDI en fichiers MIDI…", "Tutte le tracce MIDI come file MIDI…", "Todas as Pistas de MIDI como Arquivo de MIDI…", "所有 MIDI 轨道为 MIDI 文件…", "將所有 MIDI 音軌轉換為 MIDI 檔案⋯"],
@@ -3058,6 +3078,28 @@ enum AXLocalePolicy {
         derivedFrom: "logic-canon://strings/Contents%2FFrameworks%2FLogic.framework%2FVersions%2FA%2FResources%2FLocalizable.strings/en/Stereo%20Output#value"
     )
 
+    /// The default NAME Apple draws on the master Stereo Output channel strip.
+    ///
+    /// This is NOT `stereoOutputLabel`: that set classifies an output *slot* description
+    /// (`Stereo Output`, with a space). The strip's name field reads `Stereo Out` — measured once,
+    /// in en-US, in the live Mixer dump `docs/tickets/issue-234/axdump234b.out` (2026-07-04), where
+    /// the `AXTextField desc='name'` of the strip beside `Master` held `val='Stereo Out'`.
+    ///
+    /// Only that one reading exists, so this set carries only that one string. It is deliberately
+    /// NOT translated: no other locale's default has been measured, and a guessed translation would
+    /// be a name this build could not prove it was looking at. The name is also user-editable
+    /// ("Double-click to rename the channel strip"), so a renamed strip does not match either —
+    /// output-strip addressing refuses rather than falling back to an ordinal.
+    static let stereoOutStripName = LabelSet(
+        canonical: "Stereo Out",
+        variants: ["Stereo Out"],
+        rationale: "Names the master Stereo Output channel strip by the one measured en-US default"
+            + " (docs/tickets/issue-234/axdump234b.out, 2026-07-04). Not derived from Apple's"
+            + " tables and not translated: no other locale has been measured, and this set is used"
+            + " to authorize a write, so an unproven name must refuse. Distinct from"
+            + " `stereoOutputLabel`, which classifies an output slot description."
+    )
+
     /// The output slot's description when the strip is routed nowhere (#291).
     ///
     /// Measured en 2026-09-11 on the output experiment: `No Output` is a real destination Logic
@@ -3651,6 +3693,7 @@ enum AXLocalePolicy {
         controlSurfaceModelLabel,
         exportMenuItem,
         allTracksAsAudioFilesMenuItem,
+        singleTrackAsAudioFileMenuItem,
         allMIDITracksAsMIDIFileMenuItem,
         oneFilePerTrackPopupValue,
         stemExportCommitButton,
@@ -3809,6 +3852,7 @@ enum AXLocalePolicy {
         sendSlotHelpKeyword,
         sendLevelKnobHelpKeyword,
         stereoOutputLabel,
+        stereoOutStripName,
         noOutputLabel,
         unassignedInputSlotLabel,
         noInputMenuLabel,

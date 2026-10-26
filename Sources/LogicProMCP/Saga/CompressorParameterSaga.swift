@@ -178,9 +178,12 @@ struct PluginSagaExpectedBefore: Sendable {
         self.param = param; self.observed = observed; self.pluginID = pluginID
     }
 
-    func matches(track: Int, insert: Int, pluginID: String, param: String,
+    /// `track` is optional because the master Stereo Output strip has no Arrange index. A nil
+    /// track never matches this context — every Saga binding is track-addressed — so an
+    /// output-strip write made while a Saga before-state is active fails closed.
+    func matches(track: Int?, insert: Int, pluginID: String, param: String,
                  projectPath: String, observed: Value) -> Bool {
-        self.track == track && self.insert == insert && pluginID == self.pluginID
+        Optional(self.track) == track && self.insert == insert && pluginID == self.pluginID
             && self.param == param && self.projectPath.utf8.elementsEqual(projectPath.utf8)
             && SagaValueComparator.ownershipEvidence(observed: observed, desired: self.observed).equal
     }
