@@ -456,7 +456,11 @@ func testHealthResponseOmitsRemovedExternalClickDependencySection() async throws
     await cache.updateProject(project)
     let router = ChannelRouter()
 
-    let result = try! await ResourceHandlers.read(uri: "logic://project/info", cache: cache, router: router)
+    // The inert reader keeps this test about the envelope: with the production default it reads
+    // whatever document the running Logic has open, and a cached `/tmp/commercial.logicx` then
+    // contradicts it and throws the stale-project error (measured 2026-11-02 with Logic open).
+    let result = try! await ResourceHandlers.read(uri: "logic://project/info", cache: cache, router: router,
+                                                  fileReader: .unavailable)
     let envelope = try! sharedParseJSON(resourceText(result)) as! [String: Any]
     // v3.1.8 (Issue #7) — readProjectInfo now wraps in cache envelope. The
     // ProjectInfo body lives inside `data`. `source` is "ax_live" because the
