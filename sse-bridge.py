@@ -32,6 +32,7 @@ from urllib.parse import parse_qs, urlparse
 
 DEFAULT_BIN = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".build/release/LogicProMCP")
 PROTOCOL_VERSION = "2025-03-26"
+CLIENT_INFO = {"name": "logic-pro-mcp-sse-bridge", "version": "1.0"}
 
 
 class Upstream:
@@ -136,6 +137,49 @@ class Bridge:
         self.upstream = upstream
         self.sessions: dict[str, SSESession] = {}
         self._lock = threading.Lock()
+        self._init_result: dict | None = None
+
+    # ---------- MCP handshake ----------
+    #
+    # LogicProMCP accepts exactly one `initialize` per process: a second one
+    # fails with -32600 "Server is already initialized". The bridge therefore
+    # claims that handshake at startup and replays the cached result for every
+    # client, so health checks and reconnects no longer steal the only slot.
+
+    def prime(self) -> None:
+        """Perform the one-time handshake on behalf of all clients."""
+        msg = {
+            "jsonrpc": "2.0",
+            "id": "bridge-initialize",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": CLIENT_INFO,
+            },
+        }
+        try:
+            reply = self.upstream.request(msg, timeout=120.0)
+        except Exception as exc:
+            sys.stderr.write(f"[bridge] warning: upstream initialize failed: {exc}\n")
+            return
+        result = reply.get("result")
+        if result is None:
+            sys.stderr.write(f"[bridge] warning: upstream initialize rejected: {reply.get('error')}\n")
+            return
+        self._init_result = result
+        self.upstream.send({"jsonrpc": "2.0", "method": "notifications/initialized"}, None)
+        info = result.get("serverInfo") or {}
+        sys.stderr.write(
+            "[bridge] upstream initialized: %s %s (protocol %s)\n"
+            % (info.get("name", "?"), info.get("version", ""), result.get("protocolVersion", "?"))
+        )
+
+    def initialize_reply(self, payload: dict) -> dict | None:
+        """Answer a client `initialize` from the cached handshake, if primed."""
+        if self._init_result is None:
+            return None  # not primed: fall back to forwarding
+        return {"jsonrpc": "2.0", "id": payload.get("id"), "result": self._init_result}
 
     def new_session(self) -> SSESession:
         s = SSESession()
@@ -198,6 +242,22 @@ class Handler(BaseHTTPRequestHandler):
     def _read_body(self) -> bytes:
         length = int(self.headers.get("Content-Length") or 0)
         return self.rfile.read(length) if length else b""
+
+    def _reply_mcp(self, reply: dict, wants_sse: bool) -> None:
+        """Emit one JSON-RPC reply for POST /mcp, as SSE or plain JSON."""
+        if wants_sse:
+            self._sse_headers(close=True)
+            self._write_event(reply, event="message", event_id=str(int(time.time() * 1000)))
+            return
+        body = json.dumps(reply).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        if self.headers.get("Mcp-Session-Id"):
+            self.send_header("Mcp-Session-Id", self.headers["Mcp-Session-Id"])
+        self._cors()
+        self.end_headers()
+        self.wfile.write(body)
 
     def _pump_session(self, session: SSESession, initial: str | None = None) -> None:
         """Stream responses for one session until the client disconnects."""
@@ -298,6 +358,11 @@ class Handler(BaseHTTPRequestHandler):
             # Prefer a plain JSON reply: every client accepts it and curl can read it.
             # Only stream when the client asks for SSE *and* refuses JSON.
             wants_sse = "text/event-stream" in accept and "application/json" not in accept
+            if payload.get("method") == "initialize":
+                cached = self.bridge.initialize_reply(payload)
+                if cached is not None:
+                    self._reply_mcp(cached, wants_sse)
+                    return
             try:
                 reply = self.bridge.upstream.request(payload)
             except TimeoutError as exc:
@@ -306,19 +371,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:  # upstream died mid-call
                 self._json(502, {"jsonrpc": "2.0", "id": payload.get("id"), "error": {"code": -32000, "message": f"upstream error: {exc}"}})
                 return
-            if wants_sse:
-                self._sse_headers(close=True)
-                self._write_event(reply, event="message", event_id=str(int(time.time() * 1000)))
-                return
-            body = json.dumps(reply).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            if self.headers.get("Mcp-Session-Id"):
-                self.send_header("Mcp-Session-Id", self.headers["Mcp-Session-Id"])
-            self._cors()
-            self.end_headers()
-            self.wfile.write(body)
+            self._reply_mcp(reply, wants_sse)
             return
 
         self._json(404, {"error": "not found"})
@@ -350,7 +403,9 @@ def main() -> int:
         return 2
 
     upstream = Upstream([args.bin, *args.upstream_arg], args.log)
-    Handler.bridge = Bridge(upstream)
+    bridge = Bridge(upstream)
+    Handler.bridge = bridge
+    bridge.prime()
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     httpd.daemon_threads = True
     sys.stderr.write(
