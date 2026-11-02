@@ -6308,9 +6308,23 @@ extension AccessibilityChannel {
         }
         try? await Task.sleep(for: .milliseconds(250))
 
-        guard let rootMenu = await pollSlotPopupMenu(
+        var rootMenu = await pollSlotPopupMenu(
             runtime: runtime, timeoutMs: 1_200, excluding: preexistingMenus
-        ) else {
+        )
+        if rootMenu == nil, trace["slot_popup_open_action"] as? String == "custom_action" {
+            // Measured 2026-11-02 on Logic 12.4: the enumerated custom opener
+            // ("Open plug-in menu with legacy plug-ins") returns without opening anything, while a
+            // plain `AXPress` on the SAME slot opens the plug-in menu immediately — and, like the
+            // custom action, reports `cannotComplete` after doing so. The standard press is the
+            // fallback, not a coordinate click, so the path stays coordinate-free.
+            _ = AXHelpers.performAction(slot.element, kAXPressAction as String, runtime: runtime.ax)
+            trace["slot_popup_press_fallback_attempted"] = true
+            rootMenu = await pollSlotPopupMenu(
+                runtime: runtime, timeoutMs: 1_200, excluding: preexistingMenus
+            )
+            if rootMenu != nil { trace["slot_popup_open_action"] = "axpress_fallback" }
+        }
+        guard let rootMenu else {
             AXMouseHelper.pressEscape()
             return (.transientSetupFailure(stage: "slot_popup_menu_not_found", actuated: true), trace)
         }
@@ -6325,7 +6339,16 @@ extension AccessibilityChannel {
             rootMenu, toSlot: popupAnchorSlot, runtime: runtime.ax
         )
         trace["slot_popup_anchor_verified"] = anchorVerified
-        guard anchorVerified else {
+        // A frame proves this popup is the one this slot opened — where a frame exists. Measured
+        // 2026-11-02 on Logic 12.4: every menu element answers `AXPosition`/`AXSize` as 0×0, so the
+        // geometric anchor is UNOBTAINABLE on that build rather than failed, and refusing on it
+        // reported `slot_popup_not_anchored_to_target_slot` for a popup that was correctly anchored.
+        // Where geometry cannot be read, the popup is accepted on the evidence that does exist: it
+        // was not open before this slot was actuated (`preexistingMenus`) and it appeared after. The
+        // insert itself is still proven by the strip inventory readback below, never by this flag.
+        let anchorMeasurable = menuGeometryIsMeasurable(rootMenu, runtime: runtime.ax)
+        trace["slot_popup_anchor_measurable"] = anchorMeasurable
+        guard anchorVerified || !anchorMeasurable else {
             AXMouseHelper.pressEscape()
             return (.transientSetupFailure(stage: "slot_popup_not_anchored_to_target_slot", actuated: true), trace)
         }
@@ -6859,11 +6882,28 @@ extension AccessibilityChannel {
     }
 
     private static func isVisibleMenu(_ menu: AXUIElement, runtime: AXHelpers.Runtime) -> Bool {
-        guard let pos = AXHelpers.getPosition(menu, runtime: runtime),
-              let size = AXHelpers.getSize(menu, runtime: runtime) else {
-            return false
+        if let pos = AXHelpers.getPosition(menu, runtime: runtime),
+           let size = AXHelpers.getSize(menu, runtime: runtime),
+           size.width > 20, size.height > 20 {
+            return pos.x > 0 && pos.y > 0
         }
-        return pos.x > 0 && pos.y > 0 && size.width > 20 && size.height > 20
+        // No usable frame. Measured 2026-11-02 on Logic 12.4: a genuinely open plug-in popup answers
+        // `AXPosition`/`AXSize` as 0×0 at the origin, so a frame test cannot see it and every insert
+        // reported `slot_popup_menu_not_found` with the menu on screen. The menu is then judged by
+        // its content — an item child and the popup's own search field — which is what the callers'
+        // pre-existing-menu exclusion and post-actuation timing already narrow it to.
+        return AXHelpers.getChildren(menu, runtime: runtime).contains(where: {
+            (AXHelpers.getRole($0, runtime: runtime) ?? "") == (kAXMenuItemRole as String)
+        }) && AXHelpers.findDescendant(
+            of: menu, role: kAXTextFieldRole as String, maxDepth: 3, runtime: runtime
+        ) != nil
+    }
+
+    /// Whether this menu's frame can be read at all, which decides whether the geometric anchor is
+    /// evidence that exists or evidence this build does not expose.
+    private static func menuGeometryIsMeasurable(_ menu: AXUIElement, runtime: AXHelpers.Runtime) -> Bool {
+        guard let size = AXHelpers.getSize(menu, runtime: runtime) else { return false }
+        return size.width > 20 && size.height > 20
     }
 
     static func slotPopupMenuIsAnchored(

@@ -441,6 +441,66 @@ enum MainEntrypoint {
             return 0
         }
 
+        // Read-only: what a Mixer strip's volume fader actually exposes.
+        //
+        // Two separate questions decided this probe. First, `set_volume` takes a 0.0–1.0 fader
+        // POSITION and reports the raw detent it landed on — nothing in that contract is a dB
+        // value, so a recipe that says "drums −2 dB" cannot be translated from the receipt alone.
+        // Second, measured 2026-11-02 on Logic 12.4: the TRACK HEADER has no volume slider at all
+        // (it carries Mute/Solo/Record/Flex and the name), so the header was the wrong surface to
+        // ask. The Mixer strip's fader answers both: it is an `AXSlider` described as "volume
+        // fader", and its `AXValueDescription` reads the dB value the UI shows ("-2.4 dB").
+        // This probe prints that table and changes nothing.
+        if arguments.contains("--probe-fader-description") {
+            _ = ProcessUtils.Runtime.production.activateLogicPro()
+            var payload: [String: Any] = [:]
+            var rows: [[String: Any]] = []
+            var census: [[String: Any]] = []
+            for window in AXLogicProElements.nonDialogWindows(runtime: .production) {
+                let title = AXHelpers.getTitle(window) ?? ""
+                // Why a window has no fader rows is not answered by an empty array: the sliders may
+                // be described differently, or sit below the depth the fader search walks. This
+                // census counts every slider the window exposes and names each one, so the answer
+                // is a measurement rather than a guess about which of the two it was.
+                let allSliders = AXHelpers.findAllDescendants(
+                    of: window, role: kAXSliderRole, maxDepth: 20, runtime: .production,
+                    batchingRoleAndChildren: true)
+                census.append([
+                    "window": title,
+                    "sliders_at_depth_20": allSliders.count,
+                    "descriptions": Array(Set(allSliders.map {
+                        AXHelpers.getDescription($0) ?? "<none>"
+                    })).sorted(),
+                ])
+                var ordinal = 0
+                for fader in AXHelpers.findAllDescendants(
+                    of: window, role: kAXSliderRole, maxDepth: 10, runtime: .production,
+                    batchingRoleAndChildren: true
+                ) where AXHelpers.getDescription(fader) == "volume fader" {
+                    var row: [String: Any] = [
+                        "window": title,
+                        "ordinal": ordinal,
+                        "display": AXValueExtractors.extractValueDescription(fader) ?? "",
+                    ]
+                    ordinal += 1
+                    if let value: NSNumber = AXHelpers.getAttribute(
+                        fader, kAXValueAttribute as String, runtime: .production
+                    ) { row["raw"] = value.doubleValue }
+                    rows.append(row)
+                }
+            }
+            payload["mixer_faders"] = rows
+            payload["slider_census"] = census
+            payload["ok"] = !rows.isEmpty
+            let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+            guard let data, let text = String(data: data, encoding: .utf8) else {
+                writeStdout("{\"ok\":false,\"error\":\"could not encode the faders\"}\n")
+                return 1
+            }
+            writeStdout(text + "\n")
+            return 0
+        }
+
         // #628: the survivor count of a real call site's own predicate.
         //
         // `--probe-locator-census` answers "how many carry this role". It cannot answer the question

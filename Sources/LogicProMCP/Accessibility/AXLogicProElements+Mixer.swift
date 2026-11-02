@@ -16,36 +16,77 @@ enum AXMixerStripBinding {
                 && document.utf8.elementsEqual(other.document.utf8)
         }
 
-        private func currentMixerLookup(runtime: AXLogicProElements.Runtime) -> AXLogicProElements.MixerAreaLookup {
-            guard runtime.ax.attributeValuesResult != nil else {
-                return AXLogicProElements.mixerAreaLookup(in: window, runtime: runtime)
-            }
-            // Only this held-source proof uses the existing fresh census. The
-            // ordinary discovery/poller and older runtimes keep their own path.
-            // No earlier discovery or batched value becomes an identity token.
-            return (try? AXLogicProElements.mixerPopulationAreaLookup(in: window, runtime: runtime,
-                requiresCompleteAbsence: true, checking: {
-                    if Task.isCancelled { throw SessionPopulationObservation.AcquisitionError.cancelled }
-                }))?.lookup ?? .childrenUnread
-        }
-
         /// Re-read owner and complete current membership, not the cached ordinal or strip name.
+        ///
+        /// Measured 2026-11-02 on Logic 12.4: this test used to require the binding's window to BE
+        /// the Arrange window and its mixer to BE the docked one. A strip observed in the detached
+        /// Mixer window (`Window > Open Mixer`) failed both, so every `mix_` reference into that
+        /// window refused as `stale_target_reference` while the strip was on screen — and the
+        /// detached window is the only surface that names occupied inserts, so it is the surface
+        /// an operator actually works in. The ownership facts that matter are unchanged: the strip's
+        /// own window must still exist, the project must still be the one the binding was observed
+        /// in, and the captured mixer element must still enumerate the strip exactly once. The
+        /// project identity is read from the CURRENT Arrange window rather than from the binding's
+        /// window, because a Mixer window carries no `AXDocument` — that absence is not evidence
+        /// about the project, and reading it off the Mixer window would have refused every
+        /// detached-strip binding for a reason that has nothing to do with staleness.
         func currentIndex(runtime: AXLogicProElements.Runtime) -> Int? {
             guard !Task.isCancelled,
                   case .found(let currentWindow) = AXLogicProElements.arrangeWindowRead(runtime: runtime),
-                  CFEqual(window, currentWindow),
                   let app = AXLogicProElements.appRoot(runtime: runtime),
                   case .success(.elements(let windows)) = AXHelpers.getAXUIElementArrayRead(
                     app, kAXWindowsAttribute as String, runtime: runtime.ax),
                   windows.contains(where: { CFEqual($0, window) }),
-                  case .success(.some(let currentDocument)) = AXLogicProElements.projectPickerDocumentRead(window, runtime: runtime),
+                  case .success(.some(let currentDocument)) = AXLogicProElements.projectPickerDocumentRead(
+                    currentWindow, runtime: runtime),
                   document.utf8.elementsEqual(currentDocument.utf8),
-                  case .found(let currentMixer) = currentMixerLookup(runtime: runtime),
-                  CFEqual(mixer, currentMixer),
+                  // The strip's mixer must still hang off a window that is on screen. A mixer
+                  // element that outlives its place in its window is stale even though both
+                  // pointers still resolve, and that is the movement this test exists to catch.
+                  // The binding's own `window` cannot be the anchor: see the comment on the helper.
+                  Self.isAttachedToALiveWindow(mixer, windows: windows, runtime: runtime),
                   let enumeration = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: mixer, runtime: runtime.ax)
             else { return nil }
             let matching = enumeration.strips.indices.filter { CFEqual(enumeration.strips[$0], strip) }
             return matching.count == 1 ? matching[0] : nil
+        }
+
+        /// Whether `element` still hangs off one of `windows` in the tree as it reads NOW.
+        ///
+        /// The anchor is the app's live window list, not the binding's `window`. A Mixer element is
+        /// located through `mixerAreaLookup`, which answers for the DOCKED mixer inside the Arrange
+        /// window and for a DETACHED one inside its own window — while the binding's `window` is the
+        /// Arrange window, kept there because the project document lives on it. Anchoring on the
+        /// binding's window therefore refused every detached-Mixer strip for a reason that is true
+        /// of the layout rather than of staleness, which is the failure this test is meant to
+        /// separate from that layout.
+        ///
+        /// `kAXParentAttribute` alone is not enough: Logic leaves the parent pointer in place when
+        /// a child stops being one — the same way this repo's own AX fixture does — so a parent
+        /// walk would call a mixer that was removed from its window attached. The chain is therefore
+        /// confirmed at its FIRST hop by reading the parent's children, which is where the removal
+        /// shows up, and bounded afterwards: a cycle or a broken chain answers false.
+        private static func isAttachedToALiveWindow(
+            _ element: AXUIElement,
+            windows: [AXUIElement],
+            runtime: AXLogicProElements.Runtime
+        ) -> Bool {
+            func isALiveWindow(_ candidate: AXUIElement) -> Bool {
+                windows.contains(where: { CFEqual($0, candidate) })
+            }
+            if isALiveWindow(element) { return true }
+            guard let parent: AXUIElement = AXHelpers.getAttribute(
+                element, kAXParentAttribute as String, runtime: runtime.ax) else { return false }
+            guard AXHelpers.getChildren(parent, runtime: runtime.ax).contains(where: { CFEqual($0, element) })
+            else { return false }
+            var current = parent
+            for _ in 0..<12 {
+                if isALiveWindow(current) { return true }
+                guard let next: AXUIElement = AXHelpers.getAttribute(
+                    current, kAXParentAttribute as String, runtime: runtime.ax) else { return false }
+                current = next
+            }
+            return false
         }
     }
 

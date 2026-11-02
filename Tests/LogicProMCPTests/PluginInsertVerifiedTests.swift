@@ -927,7 +927,12 @@ private func makeSlotPopupInsertFixture(
     leftoverNeighbourMenuVisible: Bool = false,
     includeOtherMixerWindow: Bool = false,
     failBindingReadOnceAfterSelection: Bool = false,
-    postOpenerDrift: PostOpenerDrift? = nil
+    postOpenerDrift: PostOpenerDrift? = nil,
+    // Models the measured Logic 12.4 slot: the enumerated custom opener does nothing and a plain
+    // `AXPress` opens the popup.
+    popupOpensOnStandardPress: Bool = false,
+    // Models the measured Logic 12.4 menu frame: a popup that is open answers 0×0.
+    popupMenuHasFrame: Bool = true
 ) -> SlotPopupInsertFixture {
     let b = FakeAXRuntimeBuilder()
     let app = b.element(9000)
@@ -1056,8 +1061,12 @@ private func makeSlotPopupInsertFixture(
     }
     b.setAttribute(searchField, kAXRoleAttribute as String, kAXTextFieldRole as String)
     b.setAttribute(popupMenu, kAXRoleAttribute as String, kAXMenuRole as String)
-    b.setAttribute(popupMenu, kAXPositionAttribute as String, axPoint(410, 320))
-    b.setAttribute(popupMenu, kAXSizeAttribute as String, axSize(240, 420))
+    // An unmeasurable frame is the open popup's measured shape on Logic 12.4, not a hidden menu:
+    // the same read is what makes it indistinguishable from a closed one by geometry alone.
+    b.setAttribute(popupMenu, kAXPositionAttribute as String,
+                   popupMenuHasFrame ? axPoint(410, 320) : axPoint(0, 0))
+    b.setAttribute(popupMenu, kAXSizeAttribute as String,
+                   popupMenuHasFrame ? axSize(240, 420) : axSize(0, 0))
     if let nonMatchingLeafItem {
         b.setAttribute(nonMatchingLeafItem, kAXRoleAttribute as String, kAXMenuItemRole as String)
         b.setAttribute(nonMatchingLeafItem, kAXTitleAttribute as String, "Compressor")
@@ -1176,7 +1185,16 @@ private func makeSlotPopupInsertFixture(
                action == (kAXRaiseAction as String) {
                 slotOccupier.occupy()
             }
+            if elementID == slotKey, action == kAXPressAction as String, popupOpensOnStandardPress {
+                popupOpened.markOpened()
+                b.setChildren(app, leftoverMenu.map { [window, $0, popupMenu] } ?? [window, popupMenu])
+                return true
+            }
             if elementID == slotKey, action == slotPopupOpenCustomAction {
+                // The 12.4 slot enumerates the custom opener and then does nothing with it.
+                if popupOpensOnStandardPress {
+                    return slotOpenResult
+                }
                 // These changes occur strictly AFTER action enumeration and its final
                 // pre-opener binding/empty-slot checks, while the popup remains readable.
                 popupOpened.markOpened()
@@ -1470,6 +1488,29 @@ private func testPlugin1108TerminalGuardReportsOnlyItsObservedSlotFacts(_ drift:
     let stage = try #require(obj["setup_stage"] as? String)
     #expect(stage == "slot_popup_menu_not_found")
     #expect(fixture.actions.contains(elementID: fixture.slotItemID, action: slotPopupOpenCustomAction))
+}
+
+/// Measured on Logic 12.4: the slot enumerates a custom opener that opens nothing, the popup opens
+/// on a plain `AXPress`, and the open popup reports a 0×0 frame. Both fixes together must still
+/// mount the plugin.
+@Test func testPlugin425StandardPressOpensPopupAndUnmeasurableMenuStillInserts() async throws {
+    let fixture = makeSlotPopupInsertFixture(
+        mountGainOnLeafPick: true,
+        popupOpensOnStandardPress: true,
+        popupMenuHasFrame: false
+    )
+    let obj = await run425Insert(
+        fixture: fixture,
+        slotOpenActions: [kAXPressAction as String, slotPopupOpenCustomAction]
+    )
+
+    let state = try #require(obj["state"] as? String)
+    #expect(state == "A")
+    let trace = try #require(obj["select_trace"] as? [String: Any])
+    #expect(trace["slot_popup_open_action"] as? String == "axpress_fallback")
+    #expect(trace["slot_popup_anchor_measurable"] as? Bool == false)
+    #expect(trace["slot_popup_anchor_verified"] as? Bool == false)
+    #expect(obj["observed_plugin_name"] as? String == "Gain")
 }
 
 @Test func testPlugin425AttachedCategoryDiscoveryDoesNotNeedCategoryPick() async throws {
