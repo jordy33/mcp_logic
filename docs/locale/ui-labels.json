@@ -3720,7 +3720,7 @@
      "date": "2026-09-25",
      "host": "Logic Pro 12.3 (6674) on macOS 26.3 (25D125)",
      "locale": "ko-KR",
-     "match": "exact",
+     "match": "contains",
      "observed": "믹서",
      "path_contains": "/AXWindow/AXGroup/AXLayoutArea",
      "record": "2026-09-25-977-ko-KR-mixer-area-by-description",
@@ -3731,7 +3731,7 @@
      "date": "2026-09-25",
      "host": "Logic Pro 12.3 (6674) on macOS 26.3 (25D125)",
      "locale": "ja-JP",
-     "match": "exact",
+     "match": "contains",
      "observed": "ミキサー",
      "path_contains": "/AXWindow/AXGroup/AXLayoutArea",
      "record": "2026-09-25-977-ja-JP-mixer-area-by-description",
@@ -3742,7 +3742,7 @@
      "date": "2026-09-25",
      "host": "Logic Pro 12.3 (6674) on macOS 26.3 (25D125)",
      "locale": "es-ES",
-     "match": "exact",
+     "match": "contains",
      "observed": "Mezclador",
      "path_contains": "/AXWindow/AXGroup/AXLayoutArea",
      "record": "2026-09-25-977-es-ES-mixer-area-by-description",
@@ -3753,7 +3753,7 @@
      "date": "2026-09-25",
      "host": "Logic Pro 12.3 (6674) on macOS 26.3 (25D125)",
      "locale": "fr-FR",
-     "match": "exact",
+     "match": "contains",
      "observed": "Table de mixage",
      "path_contains": "/AXWindow/AXGroup/AXLayoutArea",
      "record": "2026-09-25-977-fr-FR-mixer-area-by-description",
@@ -3764,7 +3764,7 @@
      "date": "2026-09-25",
      "host": "Logic Pro 12.3 (6674) on macOS 26.3 (25D125)",
      "locale": "zh-CN",
-     "match": "exact",
+     "match": "contains",
      "observed": "混音器",
      "path_contains": "/AXWindow/AXGroup/AXLayoutArea",
      "record": "2026-09-25-977-zh-CN-mixer-area-by-description",
@@ -3776,7 +3776,7 @@
     "AXGroup",
     "AXScrollArea"
    ],
-   "match": "exact",
+   "match": "contains",
    "coverage": {
     "en-US": "measured",
     "ko-KR": "measured",
@@ -6852,6 +6852,24 @@
     "zh-TW": "derived"
    }
   },
+  "singleTrackAsAudioFileMenuItem": {
+   "canonical": "1 Track as Audio File…",
+   "variants": [],
+   "rationale": "Selection-rewritten File > Export leaf, measured in en-US only on 2026-08-19: with exactly one Arrange track selected the all-tracks entry reads `1 Track as Audio File…`. Derived from no canon row, because the title is produced by Logic from the live selection and is not a stored menu string; the neighbouring key command `Export Track as Audio File` is a different name for a different route and is not evidence for this leaf. Other locales must refuse rather than translate: an unmeasured singular/plural distinction is exactly where an export would silently address the wrong set.",
+   "match": "exact",
+   "coverage": {
+    "en-US": "unmeasured",
+    "ko-KR": "unmeasured",
+    "ja-JP": "unmeasured",
+    "de-DE": "unmeasured",
+    "es-ES": "unmeasured",
+    "fr-FR": "unmeasured",
+    "it-IT": "unmeasured",
+    "pt-BR": "unmeasured",
+    "zh-CN": "unmeasured",
+    "zh-TW": "unmeasured"
+   }
+  },
   "sliderPanHint": {
    "canonical": "pan",
    "variants": [
@@ -7476,6 +7494,26 @@
     "pt-BR": "derived",
     "zh-CN": "derived",
     "zh-TW": "derived"
+   }
+  },
+  "stereoOutStripName": {
+   "canonical": "Stereo Out",
+   "variants": [
+    "Stereo Out"
+   ],
+   "rationale": "Names the master Stereo Output channel strip by the one measured en-US default",
+   "match": "exact",
+   "coverage": {
+    "en-US": "unmeasured",
+    "ko-KR": "unmeasured",
+    "ja-JP": "unmeasured",
+    "de-DE": "unmeasured",
+    "es-ES": "unmeasured",
+    "fr-FR": "unmeasured",
+    "it-IT": "unmeasured",
+    "pt-BR": "unmeasured",
+    "zh-CN": "unmeasured",
+    "zh-TW": "unmeasured"
    }
   },
   "stereoOutputLabel": {
