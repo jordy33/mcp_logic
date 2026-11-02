@@ -201,6 +201,23 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "logic-pro-mcp-sse-bridge/1.0"
     bridge: Bridge  # injected
 
+    # ---------- connection lifecycle ----------
+
+    def handle_one_request(self) -> None:
+        # Clients drop keep-alive sockets all the time (health probes, aborted
+        # calls). A reset while blocked in readline is normal teardown, not a
+        # server fault, so don't let socketserver print a traceback for it.
+        try:
+            super().handle_one_request()
+        except (ConnectionResetError, BrokenPipeError):
+            self.close_connection = True
+
+    def finish(self) -> None:
+        try:
+            super().finish()
+        except (ConnectionResetError, BrokenPipeError):
+            pass
+
     # ---------- helpers ----------
 
     def _cors(self) -> None:
