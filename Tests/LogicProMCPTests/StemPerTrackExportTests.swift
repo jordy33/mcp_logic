@@ -299,7 +299,8 @@ struct StemPerTrackExportTests {
 
         #expect(artifact.stemScope == .allTracks)
         #expect(artifact.analysis["stem_scope"] == "all_tracks")
-        #expect(artifact.analysis["stem_scope_plan"]?.contains("not established") == true)
+        let scopePlan = try #require(artifact.analysis["stem_scope_plan"])
+        #expect(scopePlan.contains("not established"))
     }
 
     @Test("stem_scope without a stem artifact and an unknown value are both refused")
@@ -321,8 +322,10 @@ struct StemPerTrackExportTests {
             }
         }
 
-        #expect(refusal(artifact: "bounce", scope: "per_track")?.contains("stem_scope_requires_a_stem_artifact") == true)
-        #expect(refusal(artifact: "stem", scope: "sideways")?.contains("must be all_tracks or per_track") == true)
+        let bounceRefusal = try #require(refusal(artifact: "bounce", scope: "per_track"))
+        #expect(bounceRefusal.contains("stem_scope_requires_a_stem_artifact"))
+        let sidewaysRefusal = try #require(refusal(artifact: "stem", scope: "sideways"))
+        #expect(sidewaysRefusal.contains("must be all_tracks or per_track"))
     }
 
     @Test("all_tracks keeps today's State B reason for every subject")

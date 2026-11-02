@@ -158,5 +158,6 @@ func insertVerifiedRefusesBothSelectors() async throws {
     let object = try body(result)
     #expect(object["state"] as? String == "C")
     #expect(object["error"] as? String == "invalid_params")
-    #expect(object["write_attempted"] as? Bool == false)
+    let writeAttempted = try #require(object["write_attempted"] as? Bool)
+    #expect(!writeAttempted)
 }

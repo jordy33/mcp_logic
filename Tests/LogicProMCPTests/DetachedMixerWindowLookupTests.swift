@@ -155,7 +155,8 @@ struct DetachedMixerWindowLookupTests {
         let f = DetachedMixerFixture(docked: false)
         let resolution = AXLogicProElements.mixerWindowLookup(runtime: f.runtime)
         #expect(CFEqual(try #require(resolution.mixer), f.detachedMixer))
-        #expect(resolution.window.map { CFEqual($0, f.detached) } == true)
+        let window = try #require(resolution.window, "the lookup names the window it found")
+        #expect(CFEqual(window, f.detached))
         #expect(resolution.title == "Fixture - Mixer: All")
         #expect(resolution.placement == .detached)
     }
@@ -252,6 +253,6 @@ struct DetachedMixerWindowLookupTests {
         let resolution = AXLogicProElements.mixerWindowLookup(runtime: f.runtime)
         #expect(resolution.mixer == nil)
         #expect(resolution.placement == nil)
-        #expect(AXLogicProElements.mixerAreaLookup(runtime: f.runtime).childrenUnread == false)
+        #expect(!AXLogicProElements.mixerAreaLookup(runtime: f.runtime).childrenUnread)
     }
 }
