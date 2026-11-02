@@ -386,6 +386,61 @@ enum MainEntrypoint {
             return 0
         }
 
+        // What the Window menu actually offers, read from the OPEN menu.
+        //
+        // Observation only: it opens the menu, names every entry, closes it, and returns. It presses
+        // no entry, so nothing in the document changes. This exists because a menu item's title is
+        // not derivable — the repo's own View-menu history is the lesson: the navigation-free census
+        // records `Mixer` for an item the opened menu spells `Show Mixer`, and a LabelSet written
+        // from the census matched nothing for as long as it stood. `--probe-locator-census` cannot
+        // answer this either; it counts by ROLE, not by menu.
+        if arguments.contains("--probe-window-menu") {
+            _ = ProcessUtils.Runtime.production.activateLogicPro()
+            guard let menuBar = AXLogicProElements.getMenuBar() else {
+                writeStdout("{\"ok\":false,\"error\":\"no menu bar\"}\n")
+                return 1
+            }
+            guard let barItem = AXLocalePolicy.findMenuBarItem(
+                in: menuBar, matching: AXLocalePolicy.windowMenuBar, runtime: .production
+            ) else {
+                let titles = AXHelpers.getChildren(menuBar).compactMap { AXHelpers.getTitle($0) }
+                let data = try? JSONSerialization.data(withJSONObject: ["ok": false,
+                    "error": "no Window menu bar item", "menuBarTitles": titles], options: [.sortedKeys])
+                writeStdout((data.flatMap { String(data: $0, encoding: .utf8) } ?? "{}") + "\n")
+                return 1
+            }
+            let opened = AXHelpers.performAction(barItem, kAXPressAction as String)
+            try? await Task.sleep(for: .milliseconds(250))
+            var rows: [[String: Any]] = []
+            for item in AXHelpers.findAllDescendants(
+                of: barItem, role: kAXMenuItemRole as String, maxDepth: 5
+            ) {
+                var row: [String: Any] = [
+                    "title": AXHelpers.getTitle(item) ?? "",
+                    "description": AXHelpers.getDescription(item) ?? "",
+                ]
+                if let enabled: Bool = AXHelpers.getAttribute(item, kAXEnabledAttribute) {
+                    row["enabled"] = enabled
+                }
+                if let char: String = AXHelpers.getAttribute(item, "AXMenuItemCmdChar") {
+                    row["cmd_char"] = char
+                }
+                if let mods: Int = AXHelpers.getAttribute(item, "AXMenuItemCmdModifiers") {
+                    row["cmd_modifiers"] = mods
+                }
+                rows.append(row)
+            }
+            AXMouseHelper.pressEscape()
+            let payload: [String: Any] = ["ok": true, "opened": opened, "items": rows]
+            let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+            guard let data, let text = String(data: data, encoding: .utf8) else {
+                writeStdout("{\"ok\":false,\"error\":\"could not encode the menu\"}\n")
+                return 1
+            }
+            writeStdout(text + "\n")
+            return 0
+        }
+
         // #628: the survivor count of a real call site's own predicate.
         //
         // `--probe-locator-census` answers "how many carry this role". It cannot answer the question

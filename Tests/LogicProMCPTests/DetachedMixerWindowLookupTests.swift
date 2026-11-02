@@ -78,15 +78,25 @@ private final class DetachedMixerFixture: @unchecked Sendable {
         builder.makeLogicRuntime(appElement: app)
     }
 
-    func inventory(params: [String: String]) async -> ChannelResult {
+    func inventory(
+        params: [String: String],
+        revealMixer: AccessibilityChannel.MixerRevealAction = { _ in
+            Issue.record("the detached Mixer is open; no reveal may actuate")
+            return (nil, AccessibilityChannel.MixerRevealResult(
+                attempted: false, alreadyVisible: false, strategies: [], menuItemFound: false,
+                menuClicked: false, keySent: false, mixerVisible: false))
+        },
+        revealDetachedMixer: AccessibilityChannel.MixerRevealAction = { _ in
+            Issue.record("the detached Mixer is open; no detached reveal may actuate")
+            return (nil, AccessibilityChannel.MixerRevealResult(
+                attempted: false, alreadyVisible: false, strategies: [], menuItemFound: false,
+                menuClicked: false, keySent: false, mixerVisible: false))
+        }
+    ) async -> ChannelResult {
         await AccessibilityChannel.defaultGetPluginInventory(
             params: params, runtime: runtime,
-            revealMixer: { _ in
-                Issue.record("the detached Mixer is open; no reveal may actuate")
-                return (nil, AccessibilityChannel.MixerRevealResult(
-                    attempted: false, alreadyVisible: false, strategies: [], menuItemFound: false,
-                    menuClicked: false, keySent: false, mixerVisible: false))
-            }
+            revealMixer: revealMixer,
+            revealDetachedMixer: revealDetachedMixer
         )
     }
 
@@ -130,6 +140,33 @@ private final class DetachedMixerFixture: @unchecked Sendable {
         b.setChildren(strip, [field, slot])
         return strip
     }
+}
+
+/// Records what the reveal's actuators were asked to do, from a `@Sendable` closure.
+private final class KeyRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [(code: CGKeyCode, flags: CGEventFlags, pid: pid_t)] = []
+    func post(_ code: CGKeyCode, _ flags: CGEventFlags, _ pid: pid_t) -> Bool {
+        lock.lock(); recorded.append((code, flags, pid)); lock.unlock()
+        return true
+    }
+    var entries: [(code: CGKeyCode, flags: CGEventFlags, pid: pid_t)] {
+        lock.lock(); defer { lock.unlock() }; return recorded
+    }
+}
+
+private func revealActuators(_ recorder: KeyRecorder) -> AccessibilityChannel.MenuClickActuators {
+    .init(activateLogic: { true },
+          postKeyEvent: { recorder.post($0, $1, $2) },
+          pressEscape: {},
+          raiseMixerWindow: { true })
+}
+
+/// Counts calls made from a `@Sendable` reveal action.
+private actor CallCounter {
+    private(set) var count = 0
+    var value: Int { count }
+    func increment() { count += 1 }
 }
 
 private func inventoryBody(_ result: ChannelResult) throws -> [String: Any] {
@@ -241,6 +278,107 @@ struct DetachedMixerWindowLookupTests {
         #expect(object["state"] as? String == "A")
         #expect(object["track_name"] as? String == "Track 1")
         #expect(object["mixer_window"] as? String == "docked")
+    }
+
+    /// `View > Show Mixer` cannot serve a `detached` request, and before this change nothing in the
+    /// server opened the window either: the only way in was for an operator to press
+    /// `Window > Open Mixer` by hand. An explicit detached request with `reveal_mixer:true` now
+    /// takes the Window-menu path, and when the window does not appear it still fails closed
+    /// instead of borrowing the docked pane.
+    @Test("a detached request with reveal takes Window > Open Mixer, not View > Show Mixer")
+    func detachedRevealTakesTheWindowMenuPath() async throws {
+        let f = DetachedMixerFixture(docked: true, detachedOpen: false)
+        let calls = CallCounter()
+        let object = try inventoryBody(await f.inventory(
+            params: ["strip": "output", "mixer_window": "detached", "reveal_mixer": "true"],
+            revealMixer: { _ in
+                Issue.record("a detached request must not reveal the docked pane")
+                return (nil, .notRevealed())
+            },
+            revealDetachedMixer: { _ in
+                await calls.increment()
+                return (nil, AccessibilityChannel.MixerRevealResult(
+                    attempted: true, alreadyVisible: false,
+                    strategies: ["cgevent_cmd2_open_mixer"], menuItemFound: false,
+                    menuClicked: false, keySent: true, mixerVisible: false))
+            }
+        ))
+        let callCount = await calls.value
+        #expect(callCount == 1)
+        #expect(object["state"] as? String == "B")
+        #expect(object["plugins_unknown_reason"] as? String == "detached_mixer_not_visible")
+        let strategies = try #require(object["mixer_reveal_strategies"] as? [String])
+        #expect(strategies == ["cgevent_cmd2_open_mixer"])
+    }
+
+    /// The accelerator is the one the opened Window menu reports for `Open Mixer`:
+    /// `AXMenuItemCmdChar: 2`, `AXMenuItemCmdModifiers: 0`, measured 2026-11-02 — ⌘2, not a bare
+    /// `2`. A bare key here would type into whatever has focus.
+    @Test("the detached reveal sends ⌘2 and reports the window it could not open")
+    func detachedRevealSendsCommandTwo() async {
+        let f = DetachedMixerFixture(docked: false, detachedOpen: false)
+        let recorder = KeyRecorder()
+        let (mixer, result) = await AccessibilityChannel.ensureDetachedMixerWindowForInventory(
+            runtime: f.runtime, actuators: revealActuators(recorder)
+        )
+        #expect(mixer == nil)
+        let sent = recorder.entries
+        #expect(sent.count == 1)
+        #expect(sent.first?.code == 19, "kVK_ANSI_2")
+        #expect(sent.first?.flags.contains(.maskCommand) == true)
+        #expect(sent.first?.pid == 4242, "the fixture's Logic pid, not the server's own")
+        #expect(result.attempted)
+        #expect(result.keySent)
+        #expect(!result.mixerVisible)
+        #expect(result.strategies == ["cgevent_cmd2_open_mixer"])
+    }
+
+    /// Nothing is sent when the window is already there, and nothing is sent when Logic's windows
+    /// cannot be observed: an unknown window never authorizes an actuation.
+    @Test("the detached reveal sends no key when the window is open or unobservable")
+    func detachedRevealSendsNoKeyWithoutADefiniteAbsence() async {
+        let open = DetachedMixerFixture(docked: false)
+        let openRecorder = KeyRecorder()
+        let (openMixer, openResult) = await AccessibilityChannel.ensureDetachedMixerWindowForInventory(
+            runtime: open.runtime, actuators: revealActuators(openRecorder)
+        )
+        #expect(openMixer != nil)
+        #expect(openResult.alreadyVisible)
+        #expect(openRecorder.entries.isEmpty)
+
+        // No observable arrange window: the reveal refuses before any actuation.
+        let blocked = DetachedMixerFixture(docked: false, detachedOpen: false)
+        blocked.builder.setAttribute(blocked.app, kAXWindowsAttribute as String, [])
+        let blockedRecorder = KeyRecorder()
+        let (blockedMixer, blockedResult) = await AccessibilityChannel.ensureDetachedMixerWindowForInventory(
+            runtime: blocked.runtime, actuators: revealActuators(blockedRecorder)
+        )
+        #expect(blockedMixer == nil)
+        #expect(blockedResult.windowUnavailable)
+        #expect(blockedRecorder.entries.isEmpty)
+    }
+
+    /// The mirror image: a docked request (or any non-detached one) must never open the second
+    /// window. Opening a window the caller did not ask for changes the operator's workspace.
+    @Test("a docked request never opens the detached window")
+    func dockedRevealNeverOpensTheDetachedWindow() async throws {
+        let f = DetachedMixerFixture(docked: false, detachedOpen: false)
+        let object = try inventoryBody(await f.inventory(
+            params: ["strip": "output", "mixer_window": "docked", "reveal_mixer": "true"],
+            revealMixer: { _ in
+                (nil, AccessibilityChannel.MixerRevealResult(
+                    attempted: true, alreadyVisible: false,
+                    strategies: ["ax_menu_view_show_mixer"], menuItemFound: true,
+                    menuClicked: true, keySent: false, mixerVisible: false))
+            },
+            revealDetachedMixer: { _ in
+                Issue.record("a docked request must not press Window > Open Mixer")
+                return (nil, .notRevealed())
+            }
+        ))
+        #expect(object["state"] as? String == "B")
+        let strategies = try #require(object["mixer_reveal_strategies"] as? [String])
+        #expect(strategies == ["ax_menu_view_show_mixer"])
     }
 
     /// Acceptance 7: the mutation this suite is built to catch — restoring the arrange-window-only

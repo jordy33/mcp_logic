@@ -1,4 +1,5 @@
 import ApplicationServices
+import Carbon
 import Foundation
 
 /// Verified-plugin surface (`logic_plugins.*`) channel implementation.
@@ -172,7 +173,10 @@ extension AccessibilityChannel {
     static func defaultGetPluginInventory(
         params: [String: String],
         runtime: AXLogicProElements.Runtime = .production,
-        revealMixer: MixerRevealAction = ensureMixerAreaVisibleForInventory
+        revealMixer: MixerRevealAction = ensureMixerAreaVisibleForInventory,
+        revealDetachedMixer: MixerRevealAction = { runtime in
+            await ensureDetachedMixerWindowForInventory(runtime: runtime)
+        }
     ) async -> ChannelResult {
         let operation = "logic_plugins.get_inventory"
         // The master Stereo Output strip has no Arrange index, so `strip:"output"` selects it
@@ -281,6 +285,17 @@ extension AccessibilityChannel {
             if let placement = observed.resolution.placement {
                 boundMixerWindow = (placement, observed.resolution.title)
             }
+        } else if revealRequested, mixerWindowPreference == .detached,
+                  inventoryRevealWindow(runtime:runtime) != nil {
+            // The docked pane cannot answer a `detached` request, and the docked reveal above
+            // never opens a second window. This is the Window > Open Mixer path, and it is only
+            // taken when the caller asked for the detached surface explicitly.
+            ensuredMixer = await revealDetachedMixer(runtime)
+            if let resolved = mixerWindowWithoutReveal(
+                runtime: runtime, preference: .detached, accepting: thisTargetAccepts
+            )?.resolution, let placement = resolved.placement {
+                boundMixerWindow = (placement, resolved.title)
+            }
         } else if revealRequested, mixerWindowPreference != .detached,
                   inventoryRevealWindow(runtime:runtime) != nil {
             ensuredMixer = await revealMixer(runtime)
@@ -339,7 +354,7 @@ extension AccessibilityChannel {
                     "mixer_reveal_strategies": reveal.strategies,
                     "what_was_attempted": "read insert chain inventory for \(targetLabel) from the detached Mixer window",
                     "what_was_observed": "no detached Mixer window is open, and mixer_window:\"detached\" does not let the docked pane answer",
-                    "recovery_hint": "Open Window > Open Mixer (a detached Mixer window) and retry, or omit mixer_window or use \"auto\".",
+                    "recovery_hint": "Retry with reveal_mixer:true so the server presses Window > Open Mixer, open that window by hand and retry, or omit mixer_window or use \"auto\".",
                     "safe_to_retry": true,
                 ]
             ))
@@ -750,6 +765,78 @@ extension AccessibilityChannel {
                 mixerVisible: false
             )
         )
+    }
+
+    /// Opens the DETACHED Mixer window (`Window > Open Mixer`) when the caller asked for it.
+    ///
+    /// The reveal above drives `View > Show Mixer`, which shows the pane DOCKED inside the arrange
+    /// window — a surface that reports an occupied insert only as `audio plug-in`. A caller that
+    /// asked for the detached window cannot be served by it, and before this function existed the
+    /// only way in was for an operator to open the window by hand: `get_inventory` with
+    /// `mixer_window:"detached"` failed closed with `detached_mixer_not_visible` even when
+    /// `reveal_mixer:true` was set.
+    ///
+    /// It sends the accelerator the Window menu itself reports for that item, then polls for the
+    /// window. Nothing is pressed when Logic's windows are not positively observable, the window
+    /// that never appears is reported as not revealed rather than assumed, and `strategies` names
+    /// what was actually attempted.
+    ///
+    /// WHY A KEY AND NOT THE MENU ITEM: pressing the item through AX needs a `LabelSet`, and a
+    /// `LabelSet` needs a row pinned in `docs/canon/index/`. That corpus is pinned to Logic 12.3
+    /// (6674) while this machine runs 12.4 (6707), and `logic_canon.py build` refuses a partial
+    /// rebuild across builds — so the pin cannot be made here without moving every other cited
+    /// label to 12.4 first, which is its own change. What CAN be measured now is the accelerator:
+    /// the opened Window menu reports `Open Mixer`, enabled, `AXMenuItemCmdChar: 2`,
+    /// `AXMenuItemCmdModifiers: 0` — ⌘2, Logic's own default (measured 2026-11-02). A key command
+    /// is remappable, which is exactly why the window is polled for afterwards.
+    static func ensureDetachedMixerWindowForInventory(
+        runtime: AXLogicProElements.Runtime,
+        actuators: MenuClickActuators = .production
+    ) async -> (mixer: AXUIElement?, result: MixerRevealResult) {
+        // A detached window that is already open answers without any actuation.
+        if let found = mixerWindowWithoutReveal(runtime: runtime, preference: .detached) {
+            return (found.resolution.mixer, found.result)
+        }
+        func windowCurrent() -> Bool { inventoryRevealWindow(runtime: runtime) != nil }
+        // A key command reaches the key window, so Logic is brought forward first — and the
+        // windows are re-read afterwards: activation must not conjure an unobservable host.
+        guard windowCurrent(), actuators.activateLogic(), windowCurrent() else {
+            return (nil, .notRevealed(windowUnavailable: true))
+        }
+        var strategies: [String] = []
+        var keySent = false
+        // ⌘2: Apple's pinned key-command table binds `Open Mixer | Command-2`
+        // (docs/canon/web/logicpro-key-commands/global-commands.table.html), and 0x13 is
+        // kVK_ANSI_2 — a key POSITION, so a non-US layout still presses the same key.
+        if let pid = runtime.logicProPID(),
+           actuators.postKeyEvent(CGKeyCode(kVK_ANSI_2), [.maskCommand], pid) {
+            keySent = true
+            strategies.append("cgevent_cmd2_open_mixer")
+        }
+
+        func outcome(windowVisible: Bool, childrenUnread: Bool = false) -> MixerRevealResult {
+            MixerRevealResult(
+                attempted: true,
+                alreadyVisible: false,
+                strategies: strategies,
+                menuItemFound: false,
+                menuClicked: false,
+                keySent: keySent,
+                mixerVisible: windowVisible,
+                mixerChildrenUnread: childrenUnread
+            )
+        }
+
+        let deadline = Date().addingTimeInterval(Double(mixerRevealPollTimeoutMs) / 1000.0)
+        repeat {
+            if let found = mixerWindowWithoutReveal(runtime: runtime, preference: .detached) {
+                if let mixer = found.resolution.mixer { return (mixer, outcome(windowVisible: true)) }
+                // #982: present but its children did not read. Waiting cannot help.
+                if found.result.mixerChildrenUnread { return (nil, outcome(windowVisible: false, childrenUnread: true)) }
+            }
+            try? await Task.sleep(for: .milliseconds(100))
+        } while Date() < deadline
+        return (nil, outcome(windowVisible: false))
     }
 
     /// Polls until the Mixer is found or its children fail to read. An unread Mixer ends the poll

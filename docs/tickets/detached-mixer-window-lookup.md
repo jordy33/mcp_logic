@@ -204,3 +204,48 @@ below ~60 Hz on Stereo Out, plus an EQ + Compressor chain on the vocal track (tr
 start, and GUI scripting the plugin editor is not viable because approving the next MCP command
 returns focus to the terminal and closes/loses the plugin window. The detached Mixer window is the
 only working mixer surface in this session.
+
+## 9. Opening the detached window (2026-11-02)
+
+R4 let the server *read* a detached Mixer but not *open* one: `get_inventory {mixer_window:
+"detached", reveal_mixer: true}` fell through to `notRevealed` because the only reveal drives
+`View > Show Mixer`, which docks the pane inside the arrange window and never opens a second
+window. The operator had to press `Window > Open Mixer` by hand.
+
+**Measurement.** `--probe-window-menu` (observation only: it opens the Window menu through AX,
+names every entry, and presses nothing) on Logic Pro Creator Studio 12.4 (6707) reports
+`Open Mixer`, enabled, `AXMenuItemCmdChar: "2"`, `AXMenuItemCmdModifiers: 0` — ⌘2. The same menu
+reports `Open Main Window` ⌘1 and `Open Event List` ⌘7. Apple's pinned key-command table already
+in the repo (`docs/canon/web/logicpro-key-commands/global-commands.table.html`) binds `Open Mixer |
+Command-2`, so the measurement and the canon agree — the shortcut is Apple's default, not an
+artifact of this machine's settings.
+
+**Decision — accelerator, not AX press on the item.** Pressing the item through AX needs a
+`LabelSet`, and a `LabelSet` needs a row pinned in `docs/canon/index/`. That corpus is pinned to
+Logic 12.3 (6674) while this machine runs 12.4 (6707), and `logic_canon.py build` refuses a partial
+rebuild across builds; rebuilding against 12.4 changes pre-existing verified translations
+(`showLibraryMenuItem`, the slider/pan hints, two plugin-window labels), which is its own change.
+The accelerator is measurable today. It is also remappable, which is why the window is polled for
+afterwards rather than assumed.
+
+**Behavior.** `AccessibilityChannel.ensureDetachedMixerWindowForInventory` runs only for an
+explicit `mixer_window: "detached"` request with `reveal_mixer: true`. It returns at once if the
+window is already open; refuses without actuating when Logic's windows are not positively
+observable; activates Logic (re-reading the windows afterwards, so activation cannot conjure an
+unobservable host); posts ⌘2 to Logic's pid; then polls `mixerWindowWithoutReveal(preference:
+.detached)` for `mixerRevealPollTimeoutMs` (2.5 s). It binds the window only if it appears, reports
+`strategies: ["cgevent_cmd2_open_mixer"]`, and leaves the existing fail-closed
+`detached_mixer_not_visible` State B path (`recovery_hint` now names `reveal_mixer:true`) when it
+does not. A docked or `auto` request never takes this path.
+
+**Tests.** `DetachedMixerWindowLookupTests` gains three: the inventory routes a detached reveal to
+the new function (and a docked reveal never to it); the real function posts exactly one keycode 19
+with `.maskCommand` on a fixture with no detached window, and reports the window it could not open;
+and it posts nothing when the window is already open or when no Logic window is observable.
+**Verified live 2026-11-02** on the running project ("100 años", release build, bridge restarted).
+With only `100 años - Tracks` open, `get_inventory {strip:"output", mixer_window:"detached",
+reveal_mixer:true}` reported `mixer_reveal_strategies: ["cgevent_cmd2_open_mixer"]`, a new
+`100 años - Mixer: Tracks` window, `mixer_window: "detached"`. `track: 11` then read State A
+(`Pop Overheads`, Channel EQ + Compressor), and after the operator scrolled Stereo Out into view,
+`strip:"output"` read State A (`Channel EQ`, insert 0). Before that scroll it returned State B
+`occupied_insert_name_unreadable` — the pre-existing #1228 offscreen-row limit, not the reveal.
