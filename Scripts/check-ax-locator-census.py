@@ -83,7 +83,10 @@ import sys
 # 51 -> 50 (#1160): the exposure callbacks move extractTrackButtonState's first walker beyond
 # the detector's fixed lookahead. Its first-match behavior is unchanged; this tightens the
 # candidate budget, not a claim that another ambiguous lookup was fixed.
-BLIND_SITE_BUDGET = 50
+# 50 -> 48 (2026-11-02): the detached-Mixer lookup replaced two first-match `findDescendant`
+# walks in AccessibilityChannel+VerifiedPlugins.swift with counted ones. The detector is
+# unchanged, so these two are ground gained by the fix, not visibility lost to a looser regex.
+BLIND_SITE_BUDGET = 48
 
 SEARCH_ROOTS = ("Sources", "Scripts")
 
