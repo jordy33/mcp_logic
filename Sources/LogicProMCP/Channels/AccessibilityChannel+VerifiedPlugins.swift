@@ -247,18 +247,57 @@ extension AccessibilityChannel {
                     "safe_to_retry":false]))
         }
 
+        // Which Mixer window may answer. `auto` prefers a detached Mixer window: for the same
+        // strip its tree names occupied inserts ("Channel EQ") where the docked pane exposes only
+        // "audio plug-in". An explicit `detached` never falls back to the docked pane.
+        let mixerWindowPreference: AXLogicProElements.MixerWindowPreference
+        switch params["mixer_window"] {
+        case nil, "auto": mixerWindowPreference = .auto
+        case "docked": mixerWindowPreference = .docked
+        case "detached": mixerWindowPreference = .detached
+        default:
+            return .error(HonestContract.encodeV2StateC(
+                error: .invalidParams,
+                extras: [
+                    "operation": operation,
+                    "what_was_observed": "mixer_window must be \"auto\", \"docked\" or \"detached\"",
+                    "safe_to_retry": false,
+                ]
+            ))
+        }
+
         // The AX insert subtree is unreadable when the mixer or the requested
         // strip cannot be located — there is nothing to enumerate, so this is
         // State B `readback_unavailable` rather than a fabricated empty chain.
         let ensuredMixer: (mixer: AXUIElement?, result: MixerRevealResult)
-        if let observed = mixerWithoutReveal(runtime:runtime) {
-            ensuredMixer = observed
-        } else if revealRequested, inventoryRevealWindow(runtime:runtime) != nil {
+        var boundMixerWindow: (placement: AXLogicProElements.MixerWindowPlacement, title: String?)?
+        func thisTargetAccepts(_ mixer: AXUIElement) -> Bool {
+            mixerAccepts(mixer, track: track, runtime: runtime)
+        }
+        if let observed = mixerWindowWithoutReveal(
+            runtime: runtime, preference: mixerWindowPreference, accepting: thisTargetAccepts
+        ) {
+            ensuredMixer = (observed.resolution.mixer, observed.result)
+            if let placement = observed.resolution.placement {
+                boundMixerWindow = (placement, observed.resolution.title)
+            }
+        } else if revealRequested, mixerWindowPreference != .detached,
+                  inventoryRevealWindow(runtime:runtime) != nil {
             ensuredMixer = await revealMixer(runtime)
+            // The reveal can land the Mixer in a different window than the one it started from;
+            // record the surface that actually answered, not the request.
+            if let resolved = mixerWindowWithoutReveal(
+                runtime: runtime, preference: mixerWindowPreference,
+                accepting: thisTargetAccepts
+            )?.resolution, let placement = resolved.placement {
+                boundMixerWindow = (placement, resolved.title)
+            }
         } else {
             ensuredMixer = (nil,.notRevealed(windowUnavailable:inventoryRevealWindow(runtime:runtime) == nil))
         }
         let reveal = ensuredMixer.result
+        let mixerWindowValue: Any = boundMixerWindow.map { $0.placement.rawValue } ?? NSNull()
+        let mixerWindowTitleValue: Any = boundMixerWindow.flatMap { $0.title } ?? NSNull()
         // #982: children that did not read are unknown. Before, they read as no Mixer at all, as a
         // Mixer with no strips ("track index is not present") or as a strip with no inserts.
         func mixerChildrenUnread() -> ChannelResult {
@@ -277,6 +316,30 @@ extension AccessibilityChannel {
                         ? "reveal the mixer, then read insert chain inventory for \(targetLabel)"
                         : "read insert chain inventory for \(targetLabel)",
                     "what_was_observed": "the mixer's children did not read",
+                    "safe_to_retry": true,
+                ]
+            ))
+        }
+        // An explicit `detached` request is a constraint, not a hint: binding the docked pane
+        // would answer a different question about a different representation and change the
+        // user's layout (the reveal opens a second, docked Mixer). Fail closed with its own code.
+        if mixerWindowPreference == .detached, ensuredMixer.mixer == nil, !reveal.mixerChildrenUnread {
+            return .success(HonestContract.encodeV2StateB(
+                reason: .readbackUnavailable,
+                extras: [
+                    "operation": operation,
+                    "track": trackEcho,
+                    "strip": stripEcho,
+                    "plugins_source": "ax",
+                    "plugins_fetched_at": fetchedAt,
+                    "plugins_unknown_reason": "detached_mixer_not_visible",
+                    "mixer_window": "detached",
+                    "mixer_window_title": NSNull(),
+                    "mixer_reveal_attempted": reveal.attempted,
+                    "mixer_reveal_strategies": reveal.strategies,
+                    "what_was_attempted": "read insert chain inventory for \(targetLabel) from the detached Mixer window",
+                    "what_was_observed": "no detached Mixer window is open, and mixer_window:\"detached\" does not let the docked pane answer",
+                    "recovery_hint": "Open Window > Open Mixer (a detached Mixer window) and retry, or omit mixer_window or use \"auto\".",
                     "safe_to_retry": true,
                 ]
             ))
@@ -335,6 +398,8 @@ extension AccessibilityChannel {
                     "plugins_unknown_reason": "ax_subtree_unreadable",
                     "binding_refusal_reason": bindingRefusal ?? "binding_unavailable",
                     "binding_refusal_header_index": failingHeader.map { $0 as Any } ?? NSNull(),
+                    "mixer_window": mixerWindowValue,
+                    "mixer_window_title": mixerWindowTitleValue,
                     "what_was_attempted": "read insert chain inventory for \(targetLabel)",
                     "what_was_observed": pluginTrackBindingFailureDetail(mixer: mixer, runtime: runtime),
                     "safe_to_retry": true,
@@ -374,6 +439,8 @@ extension AccessibilityChannel {
                     "plugins_source": "ax",
                     "plugins_fetched_at": fetchedAt,
                     "plugins_unknown_reason": "insert_section_not_enumerable",
+                    "mixer_window": mixerWindowValue,
+                    "mixer_window_title": mixerWindowTitleValue,
                     "mixer_reveal_attempted": reveal.attempted,
                     "mixer_reveal_strategies": reveal.strategies,
                     "what_was_attempted": "read insert chain inventory for \(targetLabel)",
@@ -400,10 +467,14 @@ extension AccessibilityChannel {
                     "plugins_source": "ax",
                     "plugins_fetched_at": fetchedAt,
                     "plugins_unknown_reason": "occupied_insert_name_unreadable",
+                    "mixer_window": mixerWindowValue,
+                    "mixer_window_title": mixerWindowTitleValue,
                     "mixer_reveal_attempted": reveal.attempted,
                     "mixer_reveal_strategies": reveal.strategies,
                     "what_was_observed": "an occupied insert exposed a generic slot label instead of its plugin name",
-                    "recovery_hint": "Scroll the target channel strip into the Mixer view and retry.",
+                    "recovery_hint": "The docked Mixer pane names occupied inserts only generically. "
+                        + "If a detached Mixer window is open, retry with mixer_window:\"detached\"; "
+                        + "otherwise scroll the target channel strip into the Mixer view and retry.",
                     "safe_to_retry": true,
                 ]
             ))
@@ -417,6 +488,8 @@ extension AccessibilityChannel {
             "plugins_source": "ax",
             "plugins_fetched_at": fetchedAt,
             "plugins_unknown_reason": NSNull(),
+            "mixer_window": mixerWindowValue,
+            "mixer_window_title": mixerWindowTitleValue,
             "mixer_reveal_attempted": reveal.attempted,
             "mixer_reveal_strategies": reveal.strategies,
             "complete": built.complete,
@@ -432,20 +505,44 @@ extension AccessibilityChannel {
     /// `mixer_not_visible` even when the reveal eventually succeeded.
     static let mixerRevealPollTimeoutMs = 2_500
 
-    /// The reveal's first step, which actuates nothing: the Mixer when it is found, or the unread
-    /// result when a Mixer-named container's children did not read (#982). Nil means no Mixer was
-    /// found, and only then may a reveal run.
-    static func mixerWithoutReveal(
-        runtime: AXLogicProElements.Runtime
-    ) -> (mixer: AXUIElement?, result: MixerRevealResult)? {
-        let lookup = AXLogicProElements.mixerAreaLookup(runtime: runtime)
-        if let mixer = lookup.mixer {
-            return (mixer, .alreadyVisible)
+    /// The reveal's first step, which actuates nothing: the Mixer and the window it was bound in
+    /// when one is found, or the unread result when a Mixer-named container's children did not
+    /// read (#982). Nil means no Mixer was found, and only then may a reveal run.
+    static func mixerWindowWithoutReveal(
+        runtime: AXLogicProElements.Runtime,
+        preference: AXLogicProElements.MixerWindowPreference = .auto,
+        accepting: (AXUIElement) -> Bool = { _ in true }
+    ) -> (resolution: AXLogicProElements.MixerWindowLookup, result: MixerRevealResult)? {
+        let resolution = AXLogicProElements.mixerWindowLookup(
+            runtime: runtime, preference: preference, accepting: accepting
+        )
+        if resolution.mixer != nil {
+            return (resolution, .alreadyVisible)
         }
-        if lookup.childrenUnread {
-            return (nil, .childrenUnreadBeforeReveal)
+        if resolution.childrenUnread {
+            return (resolution, .childrenUnreadBeforeReveal)
         }
         return nil
+    }
+
+    /// The strip a request selects, or nil when the Mixer does not carry it. Used to keep a
+    /// preferred detached Mixer from shadowing the one that can answer for this target.
+    static func mixerAccepts(
+        _ mixer: AXUIElement, track: Int?, runtime: AXLogicProElements.Runtime
+    ) -> Bool {
+        if let track {
+            return AXPluginTrackBinding.resolve(track: track, mixer: mixer, runtime: runtime) != nil
+        }
+        return AXPluginTrackBinding.resolveOutputStrip(mixer: mixer, runtime: runtime) != nil
+    }
+
+    /// `mixerWindowWithoutReveal` with the Mixer alone, for callers that do not trace its window.
+    static func mixerWithoutReveal(
+        runtime: AXLogicProElements.Runtime,
+        preference: AXLogicProElements.MixerWindowPreference = .auto
+    ) -> (mixer: AXUIElement?, result: MixerRevealResult)? {
+        mixerWindowWithoutReveal(runtime: runtime, preference: preference)
+            .map { ($0.resolution.mixer, $0.result) }
     }
 
     /// A missing Mixer is hidden only when its owning Logic window is positively observable.
@@ -2872,7 +2969,14 @@ extension AccessibilityChannel {
 
         // Acquire identity before selection can yield to a changed Arrange order. A reference's
         // name must authorize this independently read binding, not a later replacement target.
-        let mixerLookup = AXLogicProElements.mixerAreaLookup(runtime: runtime)
+        // A Mixer is only usable when it carries the strip this write targets, so a detached Mixer
+        // window with a different channel set cannot shadow the one that does.
+        let mixerLookup = AXLogicProElements.mixerWindowLookup(runtime: runtime) { mixer in
+            if let track {
+                return AXPluginTrackBinding.resolve(track: track, mixer: mixer, runtime: runtime) != nil
+            }
+            return AXPluginTrackBinding.resolveOutputStrip(mixer: mixer, runtime: runtime) != nil
+        }.lookup
         guard let mixer = mixerLookup.mixer else {
             return .error(incompleteInventoryStateC(
                 operation, identity,
@@ -5627,7 +5731,15 @@ extension AccessibilityChannel {
                 ]
             ))
         }
-        let mixerLookup = AXLogicProElements.mixerAreaLookup(runtime: runtime)
+        // A detached Mixer window is preferred by placement, but only if it can address the strip
+        // this insert was authorized for. Another Mixer (a floating window with a different channel
+        // set) must not shadow the one that carries the target track.
+        let mixerLookup = AXLogicProElements.mixerWindowLookup(runtime: runtime) { mixer in
+            if outputStrip {
+                return AXPluginTrackBinding.resolveOutputStrip(mixer: mixer, runtime: runtime) != nil
+            }
+            return AXPluginTrackBinding.resolve(track: track, mixer: mixer, runtime: runtime) != nil
+        }.lookup
         guard let mixer = mixerLookup.mixer else {
             return refuseBeforeInsert(
                 mixerLookup.childrenUnread ? "the mixer's children did not read" : "mixer area was not locatable"
@@ -6286,17 +6398,12 @@ extension AccessibilityChannel {
                   let window = AXPluginTrackBinding.owningWindow(target, runtime: runtime) else { return false }
             return AXHelpers.performAction(window, kAXRaiseAction as String, runtime: runtime.ax)
         }
-        guard let app = AXLogicProElements.appRoot(runtime: runtime) else { return false }
-        let windows: [AXUIElement] = AXHelpers.getAttribute(
-            app, kAXWindowsAttribute as String, runtime: runtime.ax
-        ) ?? []
-        // Prefer a window that actually holds a mixer area; else the main window.
-        for window in windows {
-            if AXHelpers.findDescendant(
-                of: window, role: kAXGroupRole as String, identifier: "Mixer", maxDepth: 6, runtime: runtime.ax
-            ) != nil {
-                return AXHelpers.performAction(window, kAXRaiseAction as String, runtime: runtime.ax)
-            }
+        // Raise the window the Mixer lookup actually binds. The previous scan required an
+        // `identifier == "Mixer"` container, which the measured detached Mixer window does not
+        // expose (its containers carry only `description "Mixer"`), so the raise silently fell
+        // through to the arrange window.
+        if let mixerWindow = AXLogicProElements.mixerWindowLookup(runtime: runtime).window {
+            return AXHelpers.performAction(mixerWindow, kAXRaiseAction as String, runtime: runtime.ax)
         }
         if let main = AXLogicProElements.mainWindow(runtime: runtime) {
             return AXHelpers.performAction(main, kAXRaiseAction as String, runtime: runtime.ax)
@@ -6503,16 +6610,13 @@ extension AccessibilityChannel {
             _ = AXHelpers.setAttribute(window, kAXFocusedAttribute as String, true as CFTypeRef, runtime: .production)
             return AXHelpers.performAction(window, kAXRaiseAction as String, runtime: .production)
         }
-        guard let app = AXLogicProElements.appRoot(runtime: .production) else { return false }
-        let windows: [AXUIElement] = AXHelpers.getAttribute(
-            app, kAXWindowsAttribute as String, runtime: .production
-        ) ?? []
-        for window in windows where AXHelpers.findDescendant(
-            of: window, role: kAXGroupRole as String, identifier: "Mixer", maxDepth: 6, runtime: .production
-        ) != nil {
-            _ = AXHelpers.setAttribute(window, kAXMainAttribute as String, true as CFTypeRef, runtime: .production)
-            _ = AXHelpers.setAttribute(window, kAXFocusedAttribute as String, true as CFTypeRef, runtime: .production)
-            return AXHelpers.performAction(window, kAXRaiseAction as String, runtime: .production)
+        // The window the Mixer lookup binds, including a detached Mixer window whose containers
+        // carry only `description "Mixer"` and no identifier. The old identifier-only scan could
+        // not raise the detached window this session actually uses.
+        if let mixerWindow = AXLogicProElements.mixerWindowLookup(runtime: .production).window {
+            _ = AXHelpers.setAttribute(mixerWindow, kAXMainAttribute as String, true as CFTypeRef, runtime: .production)
+            _ = AXHelpers.setAttribute(mixerWindow, kAXFocusedAttribute as String, true as CFTypeRef, runtime: .production)
+            return AXHelpers.performAction(mixerWindow, kAXRaiseAction as String, runtime: .production)
         }
         return raiseMixerWindow(runtime: .production)
     }

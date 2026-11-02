@@ -195,9 +195,134 @@ extension AXLogicProElements {
         mixerAreaLookup(runtime: runtime).mixer
     }
 
+    /// Where the Mixer surface that answered a lookup lives.
+    enum MixerWindowPlacement: String, Sendable {
+        /// The Mixer pane docked inside the arrange window (`View > Show Mixer`).
+        case docked
+        /// The Mixer's own Logic window (`Window > Open Mixer`, titled "… - Mixer: All").
+        case detached
+    }
+
+    /// Which window a Mixer lookup may bind.
+    ///
+    /// `auto` prefers a detached Mixer window because of what the two representations carry: for
+    /// the same Stereo Out strip the docked pane exposes an occupied insert as
+    /// `AXGroup desc="audio plug-in"` while the detached window exposes `AXGroup desc="Channel EQ"`
+    /// (measured 2026-10-30). The docked pane can therefore name an empty chain but not an occupied
+    /// one. `docked` keeps the pre-existing arrange-window-only behavior.
+    enum MixerWindowPreference: String, Sendable, CaseIterable {
+        case auto
+        case docked
+        case detached
+    }
+
+    /// A Mixer lookup that names the window it bound. A caller that must raise, trace or reason
+    /// about the surface needs the owning window, not only the Mixer element inside it.
+    struct MixerWindowLookup {
+        let lookup: MixerAreaLookup
+        let window: AXUIElement?
+        let title: String?
+        let placement: MixerWindowPlacement?
+
+        var mixer: AXUIElement? { lookup.mixer }
+        var childrenUnread: Bool { lookup.childrenUnread }
+    }
+
     static func mixerAreaLookup(runtime: Runtime = .production) -> MixerAreaLookup {
-        guard let window = mainWindow(runtime: runtime) else { return .notFound }
-        return mixerAreaLookup(in: window, runtime: runtime)
+        mixerWindowLookup(runtime: runtime).lookup
+    }
+
+    /// Find the Mixer and the window that owns it.
+    ///
+    /// A detached Mixer is its own `AXWindow`; the arrange window never contains it. A lookup
+    /// rooted only at `mainWindow()` therefore answers "mixer area was not locatable" in a session
+    /// whose Mixer is open, which is the measured failure in
+    /// `docs/tickets/detached-mixer-window-lookup.md`. This runs the same candidate walk over every
+    /// non-dialog window, in a deterministic order.
+    ///
+    /// With `auto` the detached window is searched first; when several floating windows exist, the
+    /// ones whose title names the Mixer lead, then `AXWindows` order. The docked pane is the last
+    /// candidate, so a readable detached Mixer always wins. When a detached window's Mixer exists
+    /// but its children did not read, a readable Mixer elsewhere is still preferred; with nothing
+    /// readable the answer is `childrenUnread`, never `notFound`.
+    /// `accepting` filters by what the caller needs from the Mixer, for a lookup whose answer
+    /// depends on the target: an insert authorized for track 4 must not bind a detached Mixer that
+    /// carries a different channel set just because it is preferred by placement. A rejected Mixer
+    /// is skipped in favour of the next candidate; when none is accepted, the first one found is
+    /// returned so the caller can report its binding refusal instead of "mixer not locatable".
+    static func mixerWindowLookup(
+        runtime: Runtime = .production,
+        preference: MixerWindowPreference = .auto,
+        accepting: (AXUIElement) -> Bool = { _ in true }
+    ) -> MixerWindowLookup {
+        let windows = nonDialogWindows(runtime: runtime)
+        guard !windows.isEmpty else {
+            // No enumerable window list (a test double, or a host that exposes only AXMainWindow).
+            // Keep the established single-window behavior.
+            guard let window = mainWindow(runtime: runtime) else {
+                return .init(lookup: .notFound, window: nil, title: nil, placement: nil)
+            }
+            let lookup = mixerAreaLookup(in: window, runtime: runtime)
+            guard lookup.mixer != nil else {
+                return .init(lookup: lookup, window: nil, title: nil, placement: nil)
+            }
+            return .init(
+                lookup: lookup, window: window,
+                title: AXHelpers.getTitle(window, runtime: runtime.ax),
+                placement: isArrangeWindow(window, runtime: runtime) ? .docked : .detached
+            )
+        }
+        let arrange = windows.first { isArrangeWindow($0, runtime: runtime) } ?? windows[0]
+        let detached = detachedMixerOrder(
+            windows.filter { !CFEqual($0, arrange) }, runtime: runtime
+        )
+        let ordered: [(window: AXUIElement, placement: MixerWindowPlacement)]
+        switch preference {
+        case .docked:
+            ordered = [(arrange, .docked)]
+        case .detached:
+            ordered = detached.map { ($0, .detached) }
+        case .auto:
+            ordered = detached.map { ($0, .detached) } + [(arrange, .docked)]
+        }
+        var sawUnread = false
+        var firstFound: MixerWindowLookup?
+        for candidate in ordered {
+            let lookup = mixerAreaLookup(in: candidate.window, runtime: runtime)
+            switch lookup {
+            case .found(let mixer):
+                let resolution = MixerWindowLookup(
+                    lookup: lookup, window: candidate.window,
+                    title: AXHelpers.getTitle(candidate.window, runtime: runtime.ax),
+                    placement: candidate.placement
+                )
+                if accepting(mixer) { return resolution }
+                if firstFound == nil { firstFound = resolution }
+            case .childrenUnread:
+                sawUnread = true
+            case .notFound:
+                continue
+            }
+        }
+        if let firstFound { return firstFound }
+        return .init(
+            lookup: sawUnread ? .childrenUnread : .notFound,
+            window: nil, title: nil, placement: nil
+        )
+    }
+
+    /// Detached windows in a deterministic order: a window whose title names the Mixer first, then
+    /// the rest in `AXWindows` order. Changing z-order must not change which window is bound.
+    private static func detachedMixerOrder(
+        _ windows: [AXUIElement], runtime: Runtime
+    ) -> [AXUIElement] {
+        let titled = windows.filter { window in
+            guard let title = AXHelpers.getTitle(window, runtime: runtime.ax) else { return false }
+            return AXLocalePolicy.mixerNamedElement.containsAny(in: title)
+        }
+        return titled + windows.filter { window in
+            !titled.contains { CFEqual($0, window) }
+        }
     }
 
     static func mixerAreaLookup(
@@ -222,6 +347,10 @@ extension AXLogicProElements {
         let mixer: AXUIElement
         let owners: [AXUIElement]
         var path: [AXUIElement] = []
+        /// The window this walk was rooted at. The Mixer may live inside the arrange window (its
+        /// docked pane) or in its own window; reveal/raise and traces must name the window that
+        /// was actually bound rather than re-deriving one from the Mixer element.
+        var window: AXUIElement? = nil
     }
 
     static func mixerPopulationAreaLookup(
@@ -251,7 +380,8 @@ extension AXLogicProElements {
             }
             .first
         if let best {
-            return (.found(best.element), .init(mixer: best.element, owners: best.owners, path: best.path))
+            return (.found(best.element),
+                    .init(mixer: best.element, owners: best.owners, path: best.path, window: window))
         }
         return (scan.sawUnreadMixerContainer || (requiresCompleteAbsence && scan.sawIncompleteAbsence)
             ? .childrenUnread : .notFound, nil)

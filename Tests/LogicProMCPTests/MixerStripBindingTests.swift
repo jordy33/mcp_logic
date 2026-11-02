@@ -359,10 +359,16 @@ func pluginTrackBindingRawInventoryRequiresExactCrossSurfaceEvidence(_ identical
     f.builder.setAttribute(f.app, kAXWindowsAttribute as String, [floatingWindow, f.window])
     let binding = try #require(AXPluginTrackBinding.resolve(track: 9, mixer: floatingMixer, runtime: f.runtime))
     let globallyDiscovered = try #require(AXLogicProElements.getMixerArea(runtime: f.runtime))
-    #expect(CFEqual(globallyDiscovered, f.mixer), "global discovery still prefers Arrange's embedded Mixer")
+    #expect(CFEqual(globallyDiscovered, floatingMixer),
+            "auto prefers the detached Mixer window — the only measured representation that names occupied inserts")
+    // A different Mixer is still discoverable when the docked pane is asked for explicitly, which
+    // is the case this test protects: an acquired Mixer is never replaced by a fresh discovery.
+    let dockedDiscovery = try #require(
+        AXLogicProElements.mixerWindowLookup(runtime: f.runtime, preference: .docked).mixer)
+    #expect(CFEqual(dockedDiscovery, f.mixer))
     #expect(CFEqual(binding.mixer, floatingMixer))
     let owner = try #require(AXPluginTrackBinding.owningWindow(binding, runtime: f.runtime))
-    #expect(CFEqual(owner, floatingWindow), "the owning window is not the globally preferred Arrange window")
+    #expect(CFEqual(owner, floatingWindow), "the owning window follows the acquired Mixer, not the docked one")
     #expect(AXPluginTrackBinding.isStable(binding, runtime: f.runtime),
             "validation must stay within the acquired Mixer, not silently choose the embedded copy")
     f.builder.setAttribute(name, kAXValueAttribute as String, "Bass DI")

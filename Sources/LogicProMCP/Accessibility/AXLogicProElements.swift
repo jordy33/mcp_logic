@@ -165,6 +165,26 @@ enum AXLogicProElements {
         return nonDialogs.first
     }
 
+    /// Every non-dialog window in `AXWindows` order.
+    ///
+    /// `mainWindow()` answers "which window is the arrange window"; this answers "which windows
+    /// exist". A Mixer opened as its own window (`Window > Open Mixer`) is a sibling `AXWindow`,
+    /// never a descendant of the arrange window, so a search that starts at `mainWindow()` cannot
+    /// reach it even though its tree is readable and names occupied inserts.
+    static func nonDialogWindows(runtime: Runtime = .production) -> [AXUIElement] {
+        guard let app = appRoot(runtime: runtime) else { return [] }
+        let windows: [AXUIElement] = AXHelpers.getAttribute(
+            app, kAXWindowsAttribute, runtime: runtime.ax
+        ) ?? []
+        return windows.filter { !isDialogWindow($0, runtime: runtime.ax) }
+    }
+
+    /// True when `window` owns the arrange track-header rail. Auxiliary windows (Library, a
+    /// detached Mixer, plugin editors) do not.
+    static func isArrangeWindow(_ window: AXUIElement, runtime: Runtime = .production) -> Bool {
+        hasTrackHeadersGroup(window, runtime: runtime.ax)
+    }
+
     /// Resolve the non-dialog arrange candidate once for a verification poll.
     /// The caller carries the returned element to every dependent observation;
     /// it must not re-run `mainWindow()` for a count, sheet scan, or presence

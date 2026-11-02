@@ -37,8 +37,11 @@ extension AccessibilityChannel {
         runtime: AXLogicProElements.Runtime, stoppingWhen stop: () -> Bool
     ) -> (states: [ChannelStripState]?, yielded: Bool) {
         if stop() { return (nil, true) }
+        // The arrange window supplies project identity for the strip read, but not necessarily
+        // the Mixer: a detached Mixer is its own window. Searching only the arrange window left
+        // `logic://mixer` reporting `mixer_not_visible`/`cache_stale` forever in such a session.
         guard case .found(let window) = AXLogicProElements.arrangeWindowRead(runtime: runtime),
-              case .found(let mixer) = AXLogicProElements.mixerAreaLookup(in: window, runtime: runtime),
+              case .found(let mixer) = AXLogicProElements.mixerAreaLookup(runtime: runtime),
               let enumeration = AXLogicProElements.mixerChannelStripsIfCompletelyRead(in: mixer, runtime: runtime.ax)
         else { return (nil, false) }
         let states = readChannelStrips(from: enumeration.strips, runtime: runtime, window: window, mixer: mixer, stoppingWhen: stop)

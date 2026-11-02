@@ -349,7 +349,8 @@ extension AccessibilityChannel {
                               !reversePath.contains(where: { CFEqual($0, parent) }) else { return nil }
                         reversePath.append(parent)
                     }
-                    let binding = AXLogicProElements.MixerAreaBinding(mixer: mixer, owners: [], path: reversePath.reversed())
+                    let binding = AXLogicProElements.MixerAreaBinding(
+                        mixer: mixer, owners: [], path: reversePath.reversed(), window: window)
                     self.acquisitionPermitted = acquisitionPermitted
                     self.logic = logic; self.pid = pid; self.app = app; self.window = window
                     self.title = title; self.document = document; self.focus = focus; self.binding = binding

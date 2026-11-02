@@ -173,7 +173,7 @@ struct OperationCatalogTests {
         .systemSagaCancel: ["idempotency_key"],
         .systemSetupArmKey: ["consent"],
         .systemSetupControlSurface: ["consent"],
-        .pluginsGetInventory: ["track_index", "reveal_mixer"],
+        .pluginsGetInventory: ["mixer_window", "track_index", "reveal_mixer"],
         .pluginsGetParamVerified: ["insert", "param", "plugin", "plugin_id", "plugin_name", "unit"],
         .pluginsGetChannelEQStateVerified: ["insert", "plugin", "plugin_id", "plugin_name", "project_expected_path"],
         .pluginsPlanParameterChanges: ["changes", "insert", "plugin", "plugin_id", "plugin_name"],
@@ -195,15 +195,15 @@ struct OperationCatalogTests {
         .projectQuit: ["confirmed"],
         .projectExportPlan: [
             "artifact", "artifacts", "collision_policy", "kind", "naming_policy",
-            "outputRoot", "output_root", "path", "project", "projects",
+            "outputRoot", "output_root", "path", "project", "projects", "stem_scope",
         ],
         .projectExportRun: [
             "artifact", "artifacts", "collision_policy", "confirmed", "kind", "naming_policy",
-            "outputRoot", "output_root", "path", "project", "projects",
+            "outputRoot", "output_root", "path", "project", "projects", "stem_scope",
         ],
         .projectExportResume: [
             "artifact", "artifacts", "collision_policy", "confirmed", "kind", "naming_policy",
-            "outputRoot", "output_root", "path", "project", "projects",
+            "outputRoot", "output_root", "path", "project", "projects", "stem_scope",
         ],
         .projectCleanupApply: ["confirmed", "name", "names", "new_name", "stepId", "step_id"],
         .projectPlanSessionRepair: ["allow_create_aux", "allow_replace_send", "allow_stack_membership_change", "digest", "names", "on_ambiguity", "plan_id", "policy", "snapshot_id"],
@@ -237,7 +237,10 @@ struct OperationCatalogTests {
     ]
 
     private static func expectedAllowedParams(for spec: OperationSpec) -> Set<String> {
-        var expected = spec.allowedParams.intersection(["index", "project_ref", "track"])
+        // `strip` is a target selector like `track`/`index` (the plugin ops accept
+        // `strip: "output"` in place of a track index), so it is derived rather than
+        // re-pinned per operation.
+        var expected = spec.allowedParams.intersection(["index", "project_ref", "strip", "track"])
         if spec.target == .acceptsStableTarget {
             expected.insert("target_ref")
         }

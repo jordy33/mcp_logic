@@ -459,6 +459,10 @@ extension OperationRegistry {
                 // only other selector, and the channel refuses it together with `track`.
                 "strip": outputStripSelector,
                 "reveal_mixer": .enforced(.boolean, .bool(false)),
+                // Which Mixer window may answer. `auto` prefers a detached Mixer window; the
+                // channel refuses a value outside this list before binding anything.
+                "mixer_window": .enforced(.string, .string("auto"),
+                                          allowed: PluginsDispatcher.mixerWindowPreferences),
             ],uniquingKeysWith:{ _,new in new }), required: [["index", "track", "track_index", "strip"]]),
             "plugins.get_param_verified": .init(params: [
                 "target_ref": .enforced(.string, .string("ins_lpm_contract_955")), "project_ref": projectRef,

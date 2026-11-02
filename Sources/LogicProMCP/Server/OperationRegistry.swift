@@ -739,7 +739,7 @@ enum OperationRegistry {
             DeadlineClass.short,
             VerificationPolicy.none,
             TargetPolicy.none,
-            ["index", "strip", "track", "track_index", "reveal_mixer"]
+            ["index", "strip", "track", "track_index", "reveal_mixer", "mixer_window"]
         ),
         (
             .pluginsGetParamVerified,
