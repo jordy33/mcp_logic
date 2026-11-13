@@ -64,3 +64,8 @@ __pycache__/
 # One was committed by `git add -A` before this line existed — a build artifact in the tree is a
 # claim the repository did not mean to make.
 Scripts/livekit/.*.bin
+
+# Conductor workspace
+conductor/
+
+fix.md

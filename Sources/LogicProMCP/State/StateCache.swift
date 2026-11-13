@@ -1032,7 +1032,7 @@ actor StateCache {
     // MARK: - Bulk state for diagnostics
 
     struct CacheSnapshot: Sendable {
-        let transportAge: TimeInterval
+        let transportAge: TimeInterval?
         let trackCount: Int
         let regionCount: Int
         let markerCount: Int
@@ -1043,8 +1043,9 @@ actor StateCache {
     func snapshot() -> CacheSnapshot {
         let idle = timeSinceLastToolAccess()
         let mode = idle < 5 ? "active" : "idle"
+        let tAge: TimeInterval? = transport.lastUpdated > .distantPast ? Date().timeIntervalSince(transport.lastUpdated) : nil
         return CacheSnapshot(
-            transportAge: Date().timeIntervalSince(transport.lastUpdated),
+            transportAge: tAge,
             trackCount: tracks.count,
             regionCount: regions.count,
             markerCount: markers.count,

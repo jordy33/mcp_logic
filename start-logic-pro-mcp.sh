@@ -29,6 +29,21 @@ if [ ! -x "$LOGIC_PRO_MCP_BIN" ]; then
   exit 1
 fi
 
+# Compare binary mtime against newest commit touching Sources/
+if [ -d "$LOGIC_PRO_MCP_DIR/.git" ] && command -v git >/dev/null 2>&1; then
+  last_src_commit_time=$(git -C "$LOGIC_PRO_MCP_DIR" log -1 --format=%ct -- Sources/ 2>/dev/null || echo "0")
+  if [ -f "$LOGIC_PRO_MCP_BIN" ]; then
+    if stat -f %m "$LOGIC_PRO_MCP_BIN" >/dev/null 2>&1; then
+      bin_mtime=$(stat -f %m "$LOGIC_PRO_MCP_BIN")
+    else
+      bin_mtime=$(stat -c %Y "$LOGIC_PRO_MCP_BIN" 2>/dev/null || echo "0")
+    fi
+    if [ "$bin_mtime" -lt "$last_src_commit_time" ]; then
+      echo "WARNING: binary built before HEAD's last source change; run 'swift build -c release'" >&2
+    fi
+  fi
+fi
+
 case "${1:-}" in
   --stdio)
     shift

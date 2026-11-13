@@ -68,7 +68,7 @@ struct ResourceProvider {
         Resource(
             name: "Mixer",
             uri: "logic://mixer",
-            description: "All channel strips: volume, pan, plugins, sends",
+            description: "All channel strips: volume (0..1 mixer contract value, measured taper, not dB), pan, plugins, sends. Correlated by track index or strip name.",
             mimeType: "application/json",
             annotations: annotations(priority: 0.8)
         ),

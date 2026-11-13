@@ -57,7 +57,8 @@ import Testing
     #expect(idleSnapshot.regionCount == 1)
     #expect(idleSnapshot.markerCount == 1)
     #expect(idleSnapshot.projectName == "Enterprise Mix")
-    #expect(idleSnapshot.transportAge >= 0)
+    #expect(idleSnapshot.transportAge != nil)
+    #expect(idleSnapshot.transportAge! >= 0)
 
     await cache.recordToolAccess()
     let activeSnapshot = await cache.snapshot()

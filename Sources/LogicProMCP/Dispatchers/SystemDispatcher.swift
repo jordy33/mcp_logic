@@ -178,7 +178,7 @@ struct SystemDispatcher: OperationTraceDispatching {
 
         struct CacheSection: Encodable {
             let pollMode: String
-            let transportAgeSec: Double
+            let transportAgeSec: Double?
             let trackCount: Int
             let project: String
 
@@ -487,7 +487,7 @@ struct SystemDispatcher: OperationTraceDispatching {
                 channels: entries,
                 cache: .init(
                     pollMode: snap.pollMode,
-                    transportAgeSec: Double(String(format: "%.1f", snap.transportAge)) ?? snap.transportAge,
+                    transportAgeSec: snap.transportAge.map { Double(String(format: "%.1f", $0)) ?? $0 },
                     trackCount: snap.trackCount,
                     project: snap.projectName
                 ),
